@@ -115,6 +115,8 @@ class Ctx:
         self.body_raw = body_raw or ""
         self.base_url = base_url
         self.raw_query = ""          # 原始（未解码）查询串，echo 场景用它验证编码
+        # 生成文档时用假上下文调处理函数：此时要跳过 sleep 这类只该在真实请求里发生的行为
+        self.doc_mode = False
         self._body_json = _UNSET
         self._form = None
 
@@ -549,7 +551,9 @@ class Endpoint:
             "role": self.role,
             "summary": self.summary,
             "paginationType": self.pagination.get("type", "NONE"),
-            "pagination": {k: v for k, v in self.pagination.items() if k != "type"},
+            # 值可以是 callable：随 /__admin/config 变化的项（每页延迟）现算，别给出旧值
+            "pagination": {k: (v() if callable(v) else v)
+                           for k, v in self.pagination.items() if k != "type"},
             "recordPath": self.record_path,
             "primaryKey": self.primary_key,
             "expectedTotal": self.expected_total(),

@@ -8,6 +8,7 @@
 
 import base64
 import threading
+import time
 
 from .common import (
     Endpoint, Scenario, AuthSpec, ApiError,
@@ -28,20 +29,37 @@ FIXED_APP_ID, FIXED_SIGN, FIXED_TENANT = "app-001", "test-sign", "t-001"
 
 # 可由 POST /__admin/config 调整的参数
 CONFIG = {
-    "oauth2BasicTokenMaxUses": 2,        # oauth2-basic：令牌可用次数，第 N+1 次业务请求 401
+    "oauth2BasicTokenMaxUses": 2,         # oauth2-basic：令牌可用次数，第 N+1 次业务请求 401
     "oauth2ExpiringTokenTtlSeconds": 40,  # oauth2-expiring：令牌有效秒数
+    "oauth2PagedTokenMaxUses": 2,         # oauth2-paged-maxuses：同上，用于分页批次内触发 401 重取
+    "oauth2PagedTtlSeconds": 35,          # oauth2-paged-expiring：令牌有效秒数
+    "oauth2PagedDelaySeconds": 3,         # oauth2-paged-expiring：每个业务请求的服务端延迟
 }
 _CONFIG_LOCK = threading.Lock()
 
 
+# 每个配置项的取值范围（下限, 上限）。延迟允许为 0——自测要靠它把用例跑快
+CONFIG_BOUNDS = {
+    "oauth2BasicTokenMaxUses": (1, 1000),
+    "oauth2ExpiringTokenTtlSeconds": (1, 3600),
+    "oauth2PagedTokenMaxUses": (1, 1000),
+    "oauth2PagedTtlSeconds": (1, 3600),
+    "oauth2PagedDelaySeconds": (0, 60),
+}
+
+
 def apply_config(patch):
-    """调整可变参数；未知键或非法值报 400"""
+    """调整可变参数；未知键或超出范围报 400"""
     with _CONFIG_LOCK:
         for key, value in (patch or {}).items():
             if key not in CONFIG:
                 raise ApiError(400, "未知配置项：%s（可选：%s）" % (key, ", ".join(CONFIG)))
-            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-                raise ApiError(400, "配置项 %s 必须是不小于 1 的整数" % key)
+            low, high = CONFIG_BOUNDS[key]
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ApiError(400, "配置项 %s 必须是整数，收到：%r" % (key, value))
+            if value < low or value > high:
+                raise ApiError(400, "配置项 %s 取值须在 %d~%d 之间，收到：%d"
+                               % (key, low, high, value))
             CONFIG[key] = value
         return dict(CONFIG)
 
@@ -110,12 +128,14 @@ def _login_endpoint(scenario_name, inject_desc):
 
 
 def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
-                          expiring=False):
+                          max_uses_key=None, ttl_key=None):
     """OAuth2 客户端凭证令牌端点。
 
     auth_method=post  ：client_id / client_secret 放表单体；带了 Authorization 头 → 400
     auth_method=basic ：客户端凭证必须在 Authorization: Basic 头里；表单体出现 client_secret → 400
-    expiring=True     ：签发的令牌按**时间**过期，`expires_in` 返回实际有效秒数
+
+    令牌失效策略与客户端认证方式**解耦**，由配置键指定（两者可同时给，互不影响）：
+    `max_uses_key` 按使用次数失效，`ttl_key` 按时间失效，`expires_in` 随之返回实际有效秒数。
     """
 
     def handler(ctx):
@@ -135,7 +155,6 @@ def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
             if form.get("client_id") != CLIENT_ID or form.get("client_secret") != CLIENT_SECRET:
                 return json_resp({"error": "invalid_client",
                                   "error_description": "客户端凭证错误"}, status=401)
-            max_uses = None
         else:
             if "client_secret" in form:
                 return json_resp({"error": "invalid_request",
@@ -154,10 +173,11 @@ def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
             if user != CLIENT_ID or pwd != CLIENT_SECRET:
                 return json_resp({"error": "invalid_client",
                                   "error_description": "客户端凭证错误"}, status=401)
-            max_uses = config_snapshot()["oauth2BasicTokenMaxUses"]
 
+        config = config_snapshot()
+        max_uses = config[max_uses_key] if max_uses_key else None
+        ttl = config[ttl_key] if ttl_key else None
         scope = form.get("scope") or ""
-        ttl = config_snapshot()["oauth2ExpiringTokenTtlSeconds"] if expiring else None
         token = issue_token(scenario_name, max_uses=max_uses, scope=scope, prefix="oat",
                             ttl_seconds=ttl)
         payload = {"access_token": token, "token_type": "Bearer",
@@ -228,7 +248,9 @@ def _bearer_request_scenario(name, location, header_name, prefix, title, covers)
     return _simple(name, title, covers, auth, [_login_endpoint(name, inject_desc)])
 
 
-def _oauth2_scenario(name, auth_method, title, covers, extra=None, expiring=False):
+def _oauth2_auth(name, auth_method, extra=None, max_uses_key=None, ttl_key=None,
+                 note=None):
+    """OAuth2 客户端凭证鉴权：securityScheme、运行时校验、清单里的 tokenFlow 共用这一处"""
     reqs = [dynamic_token_req(name, "header", "Authorization", prefix="Bearer",
                               scheme={"type": "oauth2", "flows": {"clientCredentials": {
                                   "tokenUrl": "{base}/oauth/token",
@@ -241,19 +263,82 @@ def _oauth2_scenario(name, auth_method, title, covers, extra=None, expiring=Fals
             "clientId": CLIENT_ID, "clientSecret": CLIENT_SECRET, "scope": "read",
             "tokenPath": "access_token", "expiresInPath": "expires_in",
             "inject": {"in": "HEADER", "name": "Authorization", "prefix": "Bearer"}}
-    if auth_method == "basic":
-        # 写成 callable：/__admin/config 改了之后清单要能反映出来
-        flow["tokenMaxUses"] = lambda: config_snapshot()["oauth2BasicTokenMaxUses"]
-        flow["note"] = "令牌按使用次数失效：默认第 3 次业务请求返回 401，用于验证「401 后重取令牌并重放」"
-    if expiring:
-        flow["expiresInSeconds"] = lambda: config_snapshot()["oauth2ExpiringTokenTtlSeconds"]
-        flow["note"] = ("令牌按时间过期：签发 expiresInSeconds 秒后业务请求返回 401，"
-                        "用于验证「距过期不足 30 秒提前重取」")
-    auth = AuthSpec(kind="oauth2", requirements=reqs, flow=flow)
+    # 写成 callable：/__admin/config 改了之后清单要能反映出来
+    if max_uses_key:
+        flow["tokenMaxUses"] = lambda: config_snapshot()[max_uses_key]
+    if ttl_key:
+        flow["expiresInSeconds"] = lambda: config_snapshot()[ttl_key]
+    if note:
+        flow["note"] = note
+    return AuthSpec(kind="oauth2", requirements=reqs, flow=flow)
+
+
+def _oauth2_scenario(name, auth_method, title, covers, extra=None,
+                     max_uses_key=None, ttl_key=None, note=None):
+    auth = _oauth2_auth(name, auth_method, extra, max_uses_key, ttl_key, note)
     token_ep = _oauth_token_endpoint(name, auth_method,
                                      reject_extra_header=(extra is not None),
-                                     expiring=expiring)
+                                     max_uses_key=max_uses_key, ttl_key=ttl_key)
     return _simple(name, title, covers, auth, [token_ep])
+
+
+# ---- 分页 + OAuth2：让一个同步批次里有多次业务请求，才观察得到令牌复用与重取 ----
+
+PAGED_TOTAL = 50
+PAGED_PAGE_SIZE = 10
+
+
+def _paged_items_endpoint(rows, delay_key=None, note=""):
+    """页码分页的数据接口，共 %d 条、默认每页 %d 条（5 页）""" % (PAGED_TOTAL, PAGED_PAGE_SIZE)
+
+    def handler(ctx):
+        # doc_mode 是生成文档时的假上下文，不能在那里 sleep
+        if delay_key and not ctx.doc_mode:
+            seconds = config_snapshot()[delay_key]
+            if seconds:
+                time.sleep(seconds)
+        page = ctx.int_query("page", 1)
+        size = max(1, min(ctx.int_query("page_size", PAGED_PAGE_SIZE), 200))
+        start = (page - 1) * size
+        if start < 0:
+            raise ApiError(400, "页码不能小于 1")
+        chunk = rows[start:start + size]
+        return json_resp({"code": 0, "message": "ok",
+                          "data": {"items": chunk, "page": page, "page_size": size,
+                                   "total": len(rows),
+                                   "has_next": start + size < len(rows)}})
+
+    pagination = {"type": "PAGE_NUMBER",
+                  "pageParam": {"name": "page", "in": "QUERY"},
+                  "pageSizeParam": {"name": "page_size", "in": "QUERY"},
+                  "startFrom": 1, "defaultPageSize": PAGED_PAGE_SIZE,
+                  "totalPath": "data.total", "hasMorePath": "data.has_next"}
+    if delay_key:
+        pagination["pageDelaySeconds"] = lambda: config_snapshot()[delay_key]
+
+    return Endpoint(
+        "GET", "/items", handler,
+        operation_id="listItems", summary="查询数据项列表（页码分页）",
+        description="共 %d 条，默认每页 %d 条，取完需 %d 次请求"
+                    % (len(rows), PAGED_PAGE_SIZE, len(rows) // PAGED_PAGE_SIZE),
+        parameters=[qp("page", "integer", description="页码，从 1 开始"),
+                    qp("page_size", "integer", description="每页数量，默认 %d" % PAGED_PAGE_SIZE)],
+        role="DATA", record_path="data.items", primary_key="id",
+        dataset=lambda: list(rows), pagination=pagination,
+        doc_sample={"query": {"page": "1", "page_size": str(PAGED_PAGE_SIZE)}},
+        note=note,
+    )
+
+
+def _paged_oauth2_scenario(name, title, covers, max_uses_key=None, ttl_key=None,
+                           delay_key=None, flow_note=None, items_note=""):
+    auth = _oauth2_auth(name, "post", max_uses_key=max_uses_key, ttl_key=ttl_key,
+                        note=flow_note)
+    token_ep = _oauth_token_endpoint(name, "post", max_uses_key=max_uses_key,
+                                     ttl_key=ttl_key)
+    rows = build_dataset(name.upper(), PAGED_TOTAL)
+    items_ep = _paged_items_endpoint(rows, delay_key=delay_key, note=items_note)
+    return Scenario(name, title, covers, [token_ep, items_ep], auth=auth)
 
 
 def _forbidden_scenario():
@@ -323,13 +408,33 @@ def build_scenarios():
         _oauth2_scenario("oauth2-post", "post", "OAuth2（client_secret_post）",
                          "OAUTH2 客户端凭证，凭证放表单体"),
         _oauth2_scenario("oauth2-basic", "basic", "OAuth2（client_secret_basic，令牌短寿）",
-                         "OAUTH2 client_secret_basic + 令牌缓存失效后 401 重取并重放"),
+                         "OAUTH2 client_secret_basic + 令牌缓存失效后 401 重取并重放",
+                         max_uses_key="oauth2BasicTokenMaxUses",
+                         note="令牌按使用次数失效：默认第 3 次业务请求返回 401，"
+                              "用于验证「401 后重取令牌并重放」"),
         _oauth2_scenario("oauth2-extra", "post", "OAuth2 + 附加鉴权参数",
                          "OAUTH2 与附加鉴权参数并存；令牌请求不带附加参数",
                          extra=extra_param_req("header", "X-App-Key", EXTRA_APP_KEY)),
         _oauth2_scenario("oauth2-expiring", "post", "OAuth2（令牌按时间过期）",
                          "OAUTH2 令牌缓存与过期刷新：距过期不足 30 秒应提前重取",
-                         expiring=True),
+                         ttl_key="oauth2ExpiringTokenTtlSeconds",
+                         note="令牌按时间过期：签发 expiresInSeconds 秒后业务请求返回 401，"
+                              "用于验证「距过期不足 30 秒提前重取」"),
+        _paged_oauth2_scenario(
+            "oauth2-paged-maxuses", "OAuth2 分页（令牌按次数失效）",
+            "一个批次内多次业务请求：复用令牌遇 401 → 重取 → 重放同页",
+            max_uses_key="oauth2PagedTokenMaxUses",
+            flow_note="每个令牌最多用于 2 次业务请求，第 3 次起 401（oauth2PagedTokenMaxUses 可调）",
+            items_note="期望：一次完整同步 5 次成功的业务请求 → 令牌端点被请求 3 次、"
+                       "业务请求出现 2 次 401 且每次之后紧跟一次同页重放成功、最终 50 条无重复"),
+        _paged_oauth2_scenario(
+            "oauth2-paged-expiring", "OAuth2 分页（令牌按时间过期 + 每页延迟）",
+            "一个批次内令牌临近过期：后端应主动重取，不应出现 401",
+            ttl_key="oauth2PagedTtlSeconds", delay_key="oauth2PagedDelaySeconds",
+            flow_note="令牌有效 35 秒（oauth2PagedTtlSeconds 可调）；每个业务请求服务端延迟 3 秒"
+                      "（oauth2PagedDelaySeconds 可调），到第 3 页前后令牌剩余不足 30 秒",
+            items_note="期望：令牌端点被请求 >=2 次、所有业务请求均为 200 且无任何 401、"
+                       "最终 50 条无重复"),
         _simple("fixed-param", "固定参数鉴权（三个位置）",
                 "FIXED_PARAM：Header + Query + Cookie 同时必填",
                 AuthSpec(kind="fixedParam", requirements=[

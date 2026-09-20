@@ -34,9 +34,11 @@ def _doc_ctx(scenario, endpoint, base_url):
         body_raw = json.dumps(body, ensure_ascii=False)
     else:
         body_raw = body or ""
-    return Ctx(scenario.name, endpoint.method, base_url + endpoint.path,
-               sample.get("path") or {}, query_all, sample.get("headers") or {},
-               body_raw, base_url)
+    ctx = Ctx(scenario.name, endpoint.method, base_url + endpoint.path,
+              sample.get("path") or {}, query_all, sample.get("headers") or {},
+              body_raw, base_url)
+    ctx.doc_mode = True
+    return ctx
 
 
 def _response_of(scenario, endpoint, base_url):

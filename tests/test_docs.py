@@ -68,6 +68,9 @@ class OpenApiTest(ProviderTestCase):
 
     def test_every_declared_operation_is_reachable(self):
         checked = 0
+        # oauth2-paged-expiring 的数据接口默认延迟 3 秒，这里只关心可达性
+        self.set_config(oauth2PagedDelaySeconds=0)
+        self.addCleanup(self.set_config, oauth2PagedDelaySeconds=3)
         for entry, doc in self.docs():
             auth = build_auth(entry) if entry["auth"]["credentials"] else None
             by_key = {(i["method"], i["path"]): i for i in entry["endpoints"]}
@@ -81,7 +84,7 @@ class OpenApiTest(ProviderTestCase):
                                          "文档声明的 %s %s 打不通：%s"
                                          % (method.upper(), path, resp.text[:200]))
                         self._assert_no_schema_drift(operation, resp)
-        self.assertEqual(61, checked, "端点总数变了，请同步 README")
+        self.assertEqual(65, checked, "端点总数变了，请同步 README")
 
     def _call_declared(self, entry, item, operation, auth):
         url = item["url"]

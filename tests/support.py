@@ -324,6 +324,12 @@ class ProviderTestCase(unittest.TestCase):
                 return item
         raise AssertionError("场景 %s 下没有 %s %s" % (scenario_name, method, path))
 
+    def set_config(self, **values):
+        """调 /__admin/config（reset 不会动配置，用完记得自己恢复）"""
+        resp = request(self.base + "/__admin/config", method="POST", json_body=values)
+        assert resp.status == 200, resp.text
+        return resp.json["config"]
+
     def requests_of(self, scenario_name, limit=200):
         resp = request("%s/__admin/requests?scenario=%s&limit=%d"
                        % (self.base, scenario_name, limit))

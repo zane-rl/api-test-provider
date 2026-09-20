@@ -176,7 +176,7 @@ class AdminTest(ProviderTestCase):
 
     def test_scenarios_catalog_shape(self):
         catalog = self.catalog()
-        self.assertEqual(34, len(catalog))
+        self.assertEqual(36, len(catalog))
         for name, entry in catalog.items():
             with self.subTest(scenario=name):
                 self.assertTrue(entry["openapiUrl"].endswith("/openapi.json"))

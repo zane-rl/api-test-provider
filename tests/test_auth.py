@@ -17,6 +17,14 @@ _MISPLACE = {"HEADER": "QUERY", "QUERY": "HEADER", "COOKIE": "HEADER"}
 class AuthScenarioTest(ProviderTestCase):
     """遍历全部 A 类场景的三件事"""
 
+    def setUp(self):
+        super().setUp()
+        # 通用用例会打到 oauth2-paged-expiring，默认每页延迟 3 秒会把整组拖慢
+        self.set_config(oauth2PagedDelaySeconds=0)
+
+    def tearDown(self):
+        self.set_config(oauth2PagedDelaySeconds=3)
+
     def _auth_scenarios(self):
         return [s for s in self.catalog().values() if s["group"] == "A 鉴权"]
 
@@ -28,7 +36,7 @@ class AuthScenarioTest(ProviderTestCase):
 
     def test_correct_credentials_return_all_items(self):
         scenarios = self._auth_scenarios()
-        self.assertEqual(19, len(scenarios), "A 类场景数量变了，请同步 README")
+        self.assertEqual(21, len(scenarios), "A 类场景数量变了，请同步 README")
         for entry in scenarios:
             with self.subTest(scenario=entry["name"]):
                 items = self._items(entry)
@@ -37,8 +45,12 @@ class AuthScenarioTest(ProviderTestCase):
                                query=auth.query, cookies=auth.cookies)
                 self.assertEqual(200, resp.status, resp.text[:200])
                 rows = records_of(resp.json, items["recordPath"])
-                self.assertEqual(items["expectedTotal"], len(rows))
-                self.assertEqual(20, len(rows))
+                if items["paginationType"] == "NONE":
+                    self.assertEqual(items["expectedTotal"], len(rows))
+                    self.assertEqual(20, len(rows))
+                else:
+                    # 分页型场景这里只验「首页拿得到数据」，整体翻页在 PagedOauth2Test 里
+                    self.assertEqual(items["pagination"]["defaultPageSize"], len(rows))
 
     def test_missing_credentials_return_401(self):
         for entry in self._auth_scenarios():
