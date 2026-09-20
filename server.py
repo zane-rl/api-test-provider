@@ -19,6 +19,7 @@
 
 import argparse
 import json
+import sys
 import threading
 import traceback
 from collections import deque
@@ -323,6 +324,7 @@ def main():
     print("  健康检查：%s/health" % base)
     print("  某场景文档：%s/s/page-number/openapi.json" % base)
     print("  Ctrl+C 退出")
+    sys.stdout.flush()      # 输出重定向到文件时也能立刻看到启动横幅
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
