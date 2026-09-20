@@ -27,7 +27,10 @@ EXTRA_APP_KEY = "extra-key-1"
 FIXED_APP_ID, FIXED_SIGN, FIXED_TENANT = "app-001", "test-sign", "t-001"
 
 # 可由 POST /__admin/config 调整的参数
-CONFIG = {"oauth2BasicTokenMaxUses": 2}
+CONFIG = {
+    "oauth2BasicTokenMaxUses": 2,        # oauth2-basic：令牌可用次数，第 N+1 次业务请求 401
+    "oauth2ExpiringTokenTtlSeconds": 40,  # oauth2-expiring：令牌有效秒数
+}
 _CONFIG_LOCK = threading.Lock()
 
 
@@ -106,11 +109,13 @@ def _login_endpoint(scenario_name, inject_desc):
     )
 
 
-def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False):
+def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
+                          expiring=False):
     """OAuth2 客户端凭证令牌端点。
 
     auth_method=post  ：client_id / client_secret 放表单体；带了 Authorization 头 → 400
     auth_method=basic ：客户端凭证必须在 Authorization: Basic 头里；表单体出现 client_secret → 400
+    expiring=True     ：签发的令牌按**时间**过期，`expires_in` 返回实际有效秒数
     """
 
     def handler(ctx):
@@ -152,8 +157,11 @@ def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False)
             max_uses = config_snapshot()["oauth2BasicTokenMaxUses"]
 
         scope = form.get("scope") or ""
-        token = issue_token(scenario_name, max_uses=max_uses, scope=scope, prefix="oat")
-        payload = {"access_token": token, "token_type": "Bearer", "expires_in": 3600}
+        ttl = config_snapshot()["oauth2ExpiringTokenTtlSeconds"] if expiring else None
+        token = issue_token(scenario_name, max_uses=max_uses, scope=scope, prefix="oat",
+                            ttl_seconds=ttl)
+        payload = {"access_token": token, "token_type": "Bearer",
+                   "expires_in": ttl if ttl else 3600}
         if scope:
             payload["scope"] = scope
         return json_resp(payload)
@@ -220,7 +228,7 @@ def _bearer_request_scenario(name, location, header_name, prefix, title, covers)
     return _simple(name, title, covers, auth, [_login_endpoint(name, inject_desc)])
 
 
-def _oauth2_scenario(name, auth_method, title, covers, extra=None):
+def _oauth2_scenario(name, auth_method, title, covers, extra=None, expiring=False):
     reqs = [dynamic_token_req(name, "header", "Authorization", prefix="Bearer",
                               scheme={"type": "oauth2", "flows": {"clientCredentials": {
                                   "tokenUrl": "{base}/oauth/token",
@@ -234,11 +242,17 @@ def _oauth2_scenario(name, auth_method, title, covers, extra=None):
             "tokenPath": "access_token", "expiresInPath": "expires_in",
             "inject": {"in": "HEADER", "name": "Authorization", "prefix": "Bearer"}}
     if auth_method == "basic":
-        flow["tokenMaxUses"] = config_snapshot()["oauth2BasicTokenMaxUses"]
+        # 写成 callable：/__admin/config 改了之后清单要能反映出来
+        flow["tokenMaxUses"] = lambda: config_snapshot()["oauth2BasicTokenMaxUses"]
         flow["note"] = "令牌按使用次数失效：默认第 3 次业务请求返回 401，用于验证「401 后重取令牌并重放」"
+    if expiring:
+        flow["expiresInSeconds"] = lambda: config_snapshot()["oauth2ExpiringTokenTtlSeconds"]
+        flow["note"] = ("令牌按时间过期：签发 expiresInSeconds 秒后业务请求返回 401，"
+                        "用于验证「距过期不足 30 秒提前重取」")
     auth = AuthSpec(kind="oauth2", requirements=reqs, flow=flow)
     token_ep = _oauth_token_endpoint(name, auth_method,
-                                     reject_extra_header=(extra is not None))
+                                     reject_extra_header=(extra is not None),
+                                     expiring=expiring)
     return _simple(name, title, covers, auth, [token_ep])
 
 
@@ -313,6 +327,9 @@ def build_scenarios():
         _oauth2_scenario("oauth2-extra", "post", "OAuth2 + 附加鉴权参数",
                          "OAUTH2 与附加鉴权参数并存；令牌请求不带附加参数",
                          extra=extra_param_req("header", "X-App-Key", EXTRA_APP_KEY)),
+        _oauth2_scenario("oauth2-expiring", "post", "OAuth2（令牌按时间过期）",
+                         "OAUTH2 令牌缓存与过期刷新：距过期不足 30 秒应提前重取",
+                         expiring=True),
         _simple("fixed-param", "固定参数鉴权（三个位置）",
                 "FIXED_PARAM：Header + Query + Cookie 同时必填",
                 AuthSpec(kind="fixedParam", requirements=[

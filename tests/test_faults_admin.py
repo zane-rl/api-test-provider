@@ -4,7 +4,7 @@
 import time
 import unittest
 
-from .support import ProviderTestCase, request
+from .support import ProviderTestCase, request, obtain_token
 
 
 class FaultsTest(ProviderTestCase):
@@ -107,6 +107,50 @@ class AdminTest(ProviderTestCase):
         request(self.base + "/__admin/reset", method="POST")
         self.assertEqual(0, len(self.requests_of("none")))
 
+    def test_scoped_reset_only_clears_that_scenario_log(self):
+        request(self.scenario("none")["baseUrl"] + "/items")
+        request(self.scenario("root-array")["baseUrl"] + "/warehouses")
+        resp = request(self.base + "/__admin/reset?scenario=none", method="POST")
+        self.assertEqual(200, resp.status)
+        self.assertEqual("none", resp.json["scenario"])
+        self.assertEqual(1, resp.json["removedRequests"])
+        self.assertEqual(0, len(self.requests_of("none")))
+        self.assertEqual(1, len(self.requests_of("root-array")))
+
+    def test_scoped_reset_only_invalidates_that_scenario_tokens(self):
+        bearer = self.scenario("bearer-request")
+        oauth = self.scenario("oauth2-post")
+        bearer_token = obtain_token(bearer["baseUrl"], bearer["auth"]["tokenFlow"])
+        oauth_token = obtain_token(oauth["baseUrl"], oauth["auth"]["tokenFlow"])
+        request(self.base + "/__admin/reset?scenario=bearer-request", method="POST")
+        self.assertEqual(401, request(bearer["baseUrl"] + "/items",
+                                      headers={"Authorization": "Bearer " + bearer_token}).status)
+        self.assertEqual(200, request(oauth["baseUrl"] + "/items",
+                                      headers={"Authorization": "Bearer " + oauth_token}).status)
+
+    def test_scoped_reset_touches_fault_counters_only_for_faults(self):
+        request(self.base + "/s/faults/flaky")
+        request(self.base + "/__admin/reset?scenario=none", method="POST")
+        state = request(self.base + "/__admin/state").json
+        self.assertEqual(1, state["faultCounters"]["flaky"], "复位别的场景不应动故障计数器")
+        request(self.base + "/__admin/reset?scenario=faults", method="POST")
+        state = request(self.base + "/__admin/state").json
+        self.assertEqual({}, state["faultCounters"])
+
+    def test_scoped_reset_keeps_config(self):
+        request(self.base + "/__admin/config", method="POST",
+                json_body={"oauth2BasicTokenMaxUses": 3})
+        try:
+            resp = request(self.base + "/__admin/reset?scenario=none", method="POST")
+            self.assertEqual(3, resp.json["config"]["oauth2BasicTokenMaxUses"])
+        finally:
+            request(self.base + "/__admin/config", method="POST",
+                    json_body={"oauth2BasicTokenMaxUses": 2})
+
+    def test_scoped_reset_rejects_unknown_scenario(self):
+        resp = request(self.base + "/__admin/reset?scenario=nope", method="POST")
+        self.assertEqual(404, resp.status)
+
     def test_requests_filter_and_limit(self):
         none_url = self.scenario("none")["baseUrl"] + "/items"
         for _ in range(3):
@@ -132,7 +176,7 @@ class AdminTest(ProviderTestCase):
 
     def test_scenarios_catalog_shape(self):
         catalog = self.catalog()
-        self.assertEqual(33, len(catalog))
+        self.assertEqual(34, len(catalog))
         for name, entry in catalog.items():
             with self.subTest(scenario=name):
                 self.assertTrue(entry["openapiUrl"].endswith("/openapi.json"))
@@ -147,7 +191,7 @@ class AdminTest(ProviderTestCase):
                                         or len(item["sampleFirst3"]) <= 3)
 
     def test_token_endpoints_are_marked_as_token_role(self):
-        for name in ("bearer-request", "oauth2-post", "oauth2-basic"):
+        for name in ("bearer-request", "oauth2-post", "oauth2-basic", "oauth2-expiring"):
             roles = {i["path"]: i["role"] for i in self.scenario(name)["endpoints"]}
             self.assertEqual("DATA", roles["/items"])
             token_path = "/login" if name.startswith("bearer") else "/oauth/token"

@@ -2,6 +2,7 @@
 """A 类鉴权场景自测：正确凭证 200、缺凭证 401、凭证放错位置 401，以及各场景的专有语义。"""
 
 import base64
+import time
 import unittest
 from urllib.parse import urlencode
 
@@ -27,7 +28,7 @@ class AuthScenarioTest(ProviderTestCase):
 
     def test_correct_credentials_return_all_items(self):
         scenarios = self._auth_scenarios()
-        self.assertEqual(18, len(scenarios), "A 类场景数量变了，请同步 README")
+        self.assertEqual(19, len(scenarios), "A 类场景数量变了，请同步 README")
         for entry in scenarios:
             with self.subTest(scenario=entry["name"]):
                 items = self._items(entry)
@@ -198,6 +199,56 @@ class AuthSpecificTest(ProviderTestCase):
         finally:
             request(self.base + "/__admin/config", method="POST",
                     json_body={"oauth2BasicTokenMaxUses": 2})
+
+    def test_oauth2_expiring_declares_ttl_in_catalog(self):
+        flow = self.scenario("oauth2-expiring")["auth"]["tokenFlow"]
+        self.assertEqual(40, flow["expiresInSeconds"])
+        self.assertEqual("post", flow["clientAuthMethod"])
+
+    def test_oauth2_expiring_token_response_carries_actual_ttl(self):
+        entry = self.scenario("oauth2-expiring")
+        flow = entry["auth"]["tokenFlow"]
+        form = urlencode({"grant_type": "client_credentials", "client_id": flow["clientId"],
+                          "client_secret": flow["clientSecret"]})
+        resp = request(flow["url"], method="POST", body=form,
+                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+        self.assertEqual(200, resp.status)
+        self.assertEqual(40, resp.json["expires_in"])
+
+    def test_oauth2_expiring_token_expires_by_time(self):
+        """自测用 2 秒而不是默认的 40 秒，免得把用例拖慢"""
+        entry = self.scenario("oauth2-expiring")
+        self._set_ttl(2)
+        try:
+            flow = self.scenario("oauth2-expiring")["auth"]["tokenFlow"]
+            self.assertEqual(2, flow["expiresInSeconds"], "清单应反映改后的配置")
+            token = obtain_token(entry["baseUrl"], flow)
+            headers = {"Authorization": "Bearer " + token}
+            url = entry["baseUrl"] + "/items"
+            # 未过期时可以反复使用（与 oauth2-basic 的按次数失效区分开）
+            self.assertEqual(200, request(url, headers=headers).status)
+            self.assertEqual(200, request(url, headers=headers).status)
+            self.assertEqual(200, request(url, headers=headers).status)
+            time.sleep(2.2)
+            self.assertEqual(401, request(url, headers=headers).status)
+            # 重取后恢复
+            fresh = obtain_token(entry["baseUrl"], flow)
+            self.assertNotEqual(token, fresh)
+            self.assertEqual(200, request(url, headers={"Authorization": "Bearer " + fresh}).status)
+        finally:
+            self._set_ttl(40)
+
+    def test_oauth2_expiring_ttl_is_reported_in_state(self):
+        entry = self.scenario("oauth2-expiring")
+        token = obtain_token(entry["baseUrl"], entry["auth"]["tokenFlow"])
+        state = request(self.base + "/__admin/state").json
+        self.assertEqual(40, state["config"]["oauth2ExpiringTokenTtlSeconds"])
+        self.assertIn("expiresInSeconds", state["issuedTokens"][token])
+
+    def _set_ttl(self, seconds):
+        resp = request(self.base + "/__admin/config", method="POST",
+                       json_body={"oauth2ExpiringTokenTtlSeconds": seconds})
+        self.assertEqual(200, resp.status)
 
     def test_oauth2_config_rejects_unknown_key(self):
         resp = request(self.base + "/__admin/config", method="POST", json_body={"nope": 1})

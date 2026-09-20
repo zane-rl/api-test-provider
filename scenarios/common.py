@@ -14,6 +14,7 @@ import base64
 import json
 import re
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, unquote
@@ -192,18 +193,28 @@ _TOKEN_SEQ = {}       # scenario -> 已签发次数
 _TOKEN_LOCK = threading.Lock()
 
 
-def issue_token(scenario, max_uses=None, scope=None, prefix="tok"):
-    """签发一个确定性令牌：`<prefix>-<场景>-<序号>`。序号在 reset 后归零，便于复现。"""
+def issue_token(scenario, max_uses=None, scope=None, prefix="tok", ttl_seconds=None):
+    """签发一个确定性令牌：`<prefix>-<场景>-<序号>`。序号在 reset 后归零，便于复现。
+
+    两种失效方式，互不影响：
+    - `max_uses`：按**使用次数**失效（可复现，用于「401 后重取并重放」）
+    - `ttl_seconds`：按**时间**失效（用于「距过期不足 N 秒提前重取」）
+    """
     with _TOKEN_LOCK:
         seq = _TOKEN_SEQ.get(scenario, 0) + 1
         _TOKEN_SEQ[scenario] = seq
         token = "%s-%s-%d" % (prefix, scenario, seq)
-        _TOKENS[token] = {"scenario": scenario, "uses": 0, "maxUses": max_uses, "scope": scope}
+        _TOKENS[token] = {
+            "scenario": scenario, "uses": 0, "maxUses": max_uses, "scope": scope,
+            "ttlSeconds": ttl_seconds,
+            # 用单调时钟，不受系统时间调整影响
+            "expiresAt": (time.monotonic() + ttl_seconds) if ttl_seconds else None,
+        }
         return token
 
 
 def consume_token(scenario, token):
-    """校验令牌并计一次使用。超过 maxUses 即判失效（按次数而非时间，保证可复现）。"""
+    """校验令牌并计一次使用。超过 maxUses 或已过期即判失效。"""
     if not token:
         return False
     with _TOKEN_LOCK:
@@ -213,18 +224,32 @@ def consume_token(scenario, token):
         rec["uses"] += 1
         if rec["maxUses"] is not None and rec["uses"] > rec["maxUses"]:
             return False
+        if rec["expiresAt"] is not None and time.monotonic() > rec["expiresAt"]:
+            return False
         return True
 
 
-def reset_tokens():
+def reset_tokens(scenario=None):
+    """复位已签发令牌与令牌序号；给 scenario 则只复位该场景的"""
     with _TOKEN_LOCK:
-        _TOKENS.clear()
-        _TOKEN_SEQ.clear()
+        if scenario is None:
+            _TOKENS.clear()
+            _TOKEN_SEQ.clear()
+            return
+        for token in [t for t, rec in _TOKENS.items() if rec["scenario"] == scenario]:
+            del _TOKENS[token]
+        _TOKEN_SEQ.pop(scenario, None)
 
 
 def token_snapshot():
     with _TOKEN_LOCK:
-        return {k: dict(v) for k, v in _TOKENS.items()}
+        snapshot = {}
+        for token, rec in _TOKENS.items():
+            item = {k: v for k, v in rec.items() if k != "expiresAt"}
+            if rec["expiresAt"] is not None:
+                item["expiresInSeconds"] = round(rec["expiresAt"] - time.monotonic(), 1)
+            snapshot[token] = item
+        return snapshot
 
 
 # ==================== 鉴权 ====================
@@ -400,7 +425,9 @@ class AuthSpec:
         """后端侧「该怎么配」的结构化信息"""
         flow = None
         if self.flow:
-            flow = dict(self.flow)
+            # 值可以是 callable：随 /__admin/config 变化的项（令牌可用次数、过期秒数）
+            # 必须在这里现算，否则清单会一直显示进程启动时的旧值
+            flow = {k: (v() if callable(v) else v) for k, v in self.flow.items()}
             if "urlPath" in flow:
                 flow["url"] = base_url + flow.pop("urlPath")
         return {

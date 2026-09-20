@@ -52,7 +52,7 @@ server.py                   HTTP 处理、路由、请求日志、/health、/__a
 scenarios/
   common.py                 Ctx/Resp/ApiError、鉴权模型、Endpoint/Scenario、造数、令牌仓库、schema 推断
   openapi.py                由注册表动态生成 OpenAPI 3.0 文档 + Swagger 2.0 转换器
-  auth.py                   A 鉴权（18 个场景）
+  auth.py                   A 鉴权（19 个场景）
   pagination.py             B 分页（8 个场景）
   payload.py                C 请求与响应（4 个场景）
   depend.py                 D 依赖（2 个场景）
@@ -110,6 +110,8 @@ tests/                      标准库 unittest
 | **oauth2-basic** | OAUTH2 client_secret_basic + 令牌缓存失效后 401 重取并重放 | `POST /oauth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /oauth/token`，client_secret_basic，`test-client` / `test-secret` | NONE | — | 无 | — |
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 | **oauth2-extra** | OAUTH2 与附加鉴权参数并存；令牌请求不带附加参数 | `POST /oauth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>附加 HEADER `X-App-Key` = `extra-key-1`<br>令牌：`POST /oauth/token`，client_secret_post，`test-client` / `test-secret` | NONE | — | 无 | — |
+|  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **oauth2-expiring** | OAUTH2 令牌缓存与过期刷新：距过期不足 30 秒应提前重取 | `POST /oauth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /oauth/token`，client_secret_post，`test-client` / `test-secret` | NONE | — | 无 | — |
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 | **fixed-param** | FIXED_PARAM：Header + Query + Cookie 同时必填 | `GET /items`<br>DATA | HEADER `X-App-Id` = `app-001`<br>QUERY `sign` = `test-sign`<br>COOKIE `tenant` = `t-001` | NONE | `data.items` | `id` | 20 |
 | **bearer-extra** | BEARER_TOKEN 与附加鉴权参数（Header + Query）并存 | `GET /items`<br>DATA | HEADER `Authorization` = `Bearer test-token-abc`<br>附加 HEADER `X-App-Key` = `extra-key-1`<br>附加 QUERY `sign` = `test-sign` | NONE | `data.items` | `id` | 20 |
@@ -182,6 +184,7 @@ tests/                      标准库 unittest
 | `next-url` `/suppliers-crosshost` | `next` 指向 `http://localhost:<端口>`，与文档里的 `127.0.0.1` 不同源，**后端应拒绝跟随**；拒绝时只应取到首页 15 条（`expectedTotal` 给的是数据总量 41） |
 | `oauth2-post` `/oauth/token` | 带了 `Authorization` 头返回 400（证明后端选对了 client_secret_post） |
 | `oauth2-basic` `/oauth/token` | 表单体里出现 `client_secret` 返回 400；签发的令牌**按使用次数失效**，默认第 3 次业务请求返回 401 |
+| `oauth2-expiring` `/oauth/token` | 令牌**按时间过期**：`expires_in` 返回实际有效秒数（默认 40），到点后业务请求 401。用于验证后端「距过期不足 30 秒提前重取」——拿到令牌后等约 15 秒再发请求，应看到令牌端点被请求 2 次且业务请求无 401 |
 | `oauth2-extra` `/oauth/token` | 令牌请求带了附加鉴权参数 `X-App-Key` 返回 400（后端约定：令牌请求不带附加参数） |
 | `apikey-header-prefix` | `Authorization` 的值必须是 `Token test-key-123`，无前缀或前缀不符 401，错误消息里点名「缺少前缀 Token」 |
 | `forbidden` `/secret-items` | 凭证正确也恒定 403；无凭证仍是 401 |
@@ -224,8 +227,9 @@ tests/                      标准库 unittest
 | `GET /health` | `{"status":"ok"}` |
 | `GET /__admin/scenarios` | 全部场景清单：文档地址、鉴权方式与测试凭证（含 `prefix` / `extraAuthParams` / `tokenFlow`）、每个端点的 `method` / `path` / `role` / `paginationType` / 分页参数名与位置 / `recordPath` / `primaryKey` / `expectedTotal` / `sampleFirst3` |
 | `GET /__admin/requests?scenario=<名字>&limit=<N>` | 服务端实际收到的请求日志，按时间顺序；含序号、方法、路径、解码后的 Query、`rawQuery`、全部请求头、Cookie、原始请求体、响应状态码。内存最多保留最近 5000 条 |
-| `POST /__admin/reset` | 清空请求日志，复位 `flaky` / `rate-limit` 计数器、已签发令牌与令牌序号。**不改 config** |
-| `GET/POST /__admin/config` | 读取 / 调整可变参数。目前只有 `oauth2BasicTokenMaxUses`（默认 2，即第 3 次业务请求令牌失效） |
+| `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、已签发令牌与令牌序号。**不改 config** |
+| `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位。场景名不存在返回 404 |
+| `GET/POST /__admin/config` | 读取 / 调整可变参数：`oauth2BasicTokenMaxUses`（默认 2，即第 3 次业务请求令牌失效）、`oauth2ExpiringTokenTtlSeconds`（默认 40，`oauth2-expiring` 的令牌有效秒数）。改了之后 `/__admin/scenarios` 的 `tokenFlow` 会立刻反映新值 |
 | `GET /__admin/state` | 当前配置、故障计数器、已签发令牌快照（排查用） |
 
 鉴权描述的结构（`/__admin/scenarios` → `scenarios[].auth`）：
@@ -288,11 +292,13 @@ tests/                      标准库 unittest
 ## 已知局限
 
 - 请求日志只在内存，进程退出即丢；最多 5000 条，超出丢最早的。
-- `/__admin/reset` 是全局的：多个测试并发跑同一个实例会互相干扰。Java 集成测试建议
-  **一个测试类独占一个实例**（或在每个用例前 reset 并串行执行）。
-- `oauth2BasicTokenMaxUses` 是进程级配置，同样不适合并发共享。
-- 令牌按**使用次数**失效而不是按时间，因此无法验证「令牌到期时间临近时提前重取」这类基于
-  `expires_in` 的逻辑；响应里的 `expires_in` 恒为 3600。
+- **并发共享的现状**：请求日志已能按场景隔离清理（`POST /__admin/reset?scenario=<名字>`），
+  不同场景的用例可以并发跑同一个实例而不互相清掉日志。但仍有两处是**进程级全局**：
+  `/__admin/config` 的配置项（`oauth2BasicTokenMaxUses` / `oauth2ExpiringTokenTtlSeconds`）、
+  以及故障场景那几个计数器（它们本就只属于 `faults`）。所以：
+  **改配置或跑 `faults` 场景的用例必须独占实例或串行**，其余场景并发跑没问题。
+- 令牌有两种失效方式：`oauth2-basic` 按**使用次数**（可复现），`oauth2-expiring` 按**时间**。
+  其余场景的令牌不失效，`expires_in` 恒为 3600。
 - 只支持 HTTP，没有 HTTPS / mTLS 场景。
 - `suppliers-crosshost` 的「异源」靠 `localhost` 与 `127.0.0.1` 的主机名差异构造，二者解析到同一进程；
   如果后端按 IP 而不是按主机名判同源，这个场景不会触发拒绝。
@@ -304,3 +310,4 @@ tests/                      标准库 unittest
 | 日期 | 变更 |
 |---|---|
 | 2026-09-20 | v1：33 个场景 / 59 个端点 / 84 条自测用例。含 Commander 追加的 4 个鉴权场景（`apikey-header-prefix`、`apikey-extra`、`basic-extra`、`oauth2-extra`）与 `role` / 结构化鉴权配置要求。 |
+| 2026-09-20 | H2：`POST /__admin/reset` 支持 `?scenario=` 按场景复位；新增 `oauth2-expiring`（令牌按时间过期，`expires_in` 默认 40 秒，可由 `/__admin/config` 调）；`/__admin/scenarios` 的 `tokenFlow` 改为实时取配置值。34 个场景 / 61 个端点 / 93 条自测。 |

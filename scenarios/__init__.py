@@ -30,7 +30,12 @@ def build_registry():
 REGISTRY = build_registry()
 
 
-def reset_all():
-    """复位所有计数器与已签发令牌（请求日志由 server 侧清空）"""
-    reset_tokens()
-    faults.reset_counters()
+def reset_all(scenario=None):
+    """复位计数器与已签发令牌（请求日志由 server 侧清空）。
+
+    给 scenario 则只复位该场景相关的状态：令牌按场景过滤，
+    故障计数器只属于 `faults` 场景，所以别的场景不碰它。
+    """
+    reset_tokens(scenario)
+    if scenario is None or scenario == "faults":
+        faults.reset_counters()

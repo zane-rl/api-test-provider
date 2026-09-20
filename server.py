@@ -62,10 +62,22 @@ class RequestLog:
             rows = rows[-limit:]
         return total, rows
 
-    def clear(self):
+    def clear(self, scenario=None):
+        """清空日志；给 scenario 则只清该场景的（序号不归零，避免与残留条目撞号）。
+
+        返回清掉的条数。
+        """
         with self._lock:
+            if scenario is None:
+                removed = len(self._entries)
+                self._entries.clear()
+                self._seq = 0
+                return removed
+            kept = [e for e in self._entries if e.get("scenario") != scenario]
+            removed = len(self._entries) - len(kept)
             self._entries.clear()
-            self._seq = 0
+            self._entries.extend(kept)
+            return removed
 
 
 # ==================== HTTP 处理 ====================
@@ -244,10 +256,16 @@ class Handler(BaseHTTPRequestHandler):
                               "returned": len(rows), "requests": rows})
 
         if path == "/__admin/reset" and method == "POST":
-            self.server.request_log.clear()
-            reset_all()
-            return json_resp({"status": "ok", "message": "请求日志已清空，计数器与已签发令牌已复位",
-                              "config": auth_module.config_snapshot()})
+            name = (query_all.get("scenario") or [None])[0]
+            if name is not None and name not in REGISTRY:
+                raise ApiError(404, "无此场景：%s（可用场景见 /__admin/scenarios）" % name)
+            removed = self.server.request_log.clear(name)
+            reset_all(name)
+            scope = ("场景 %s " % name) if name else "全部场景"
+            return json_resp({
+                "status": "ok", "scenario": name, "removedRequests": removed,
+                "message": "%s的请求日志已清空，相关计数器与已签发令牌已复位（配置不变）" % scope,
+                "config": auth_module.config_snapshot()})
 
         if path == "/__admin/config":
             if method == "GET":
