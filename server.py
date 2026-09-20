@@ -34,6 +34,8 @@ from scenarios.common import ApiError, Ctx, Resp, error_resp, json_resp, token_s
 from scenarios.openapi import build_openapi, build_swagger2
 
 MAX_LOG = 5000
+MAX_BODY_BYTES = 10 * 1024 * 1024      # 请求体上限，防止分块读取被撑爆
+MAX_CHUNK_LINE = 65536                 # 块长度行 / trailer 行的最大长度
 
 
 # ==================== 请求日志 ====================
@@ -111,14 +113,79 @@ class Handler(BaseHTTPRequestHandler):
         return resp.status
 
     def _read_body(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0:
-            return ""
-        raw = self.rfile.read(length)
+        """读请求体。
+
+        **唯一一处读体的地方**，所有端点都经过它。除 `Content-Length` 外还要支持
+        `Transfer-Encoding: chunked`——JDK HttpClient 发 POST 时默认就是 chunked 且不带
+        `Content-Length`（HTTP/1.1 合法），而 `http.server` 不会自动解码。
+        """
+        encoding = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in encoding:
+            raw = self._read_chunked()
+        else:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                return ""
+            if length > MAX_BODY_BYTES:
+                raise ApiError(413, "请求体超过上限 %d 字节" % MAX_BODY_BYTES)
+            raw = self.rfile.read(length)
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
             return raw.decode("latin-1")
+
+    def _read_chunked(self):
+        """按 RFC 7230 §4.1 解码分块请求体。
+
+        块长度行可能带 `;` 扩展；最后一块长度为 0，之后可能有 trailer，读到空行为止。
+        任何格式错误都要把连接标记为关闭——此时字节流已经错位，keep-alive 复用会串包。
+        """
+        pieces = []
+        total = 0
+        while True:
+            size_line = self.rfile.readline(MAX_CHUNK_LINE)
+            if not size_line:
+                raise self._chunk_error("读取块长度时连接提前结束")
+            size_field = size_line.split(b";", 1)[0].strip()
+            if not size_field:
+                raise self._chunk_error("块长度行为空")
+            try:
+                size = int(size_field, 16)
+            except ValueError:
+                raise self._chunk_error("块长度不是十六进制：%r" % size_field[:40])
+            if size < 0:
+                raise self._chunk_error("块长度为负")
+            if size == 0:
+                break
+            total += size
+            if total > MAX_BODY_BYTES:
+                self.close_connection = True
+                raise ApiError(413, "分块请求体超过上限 %d 字节" % MAX_BODY_BYTES)
+            data = self._read_exactly(size)
+            pieces.append(data)
+            tail = self.rfile.read(2)          # 每块数据后面跟一个 CRLF
+            if tail not in (b"\r\n", b"\n\r", b"\n"):
+                raise self._chunk_error("块数据后缺少 CRLF")
+        # trailer：读到空行为止
+        while True:
+            line = self.rfile.readline(MAX_CHUNK_LINE)
+            if not line or line in (b"\r\n", b"\n"):
+                break
+        return b"".join(pieces)
+
+    def _read_exactly(self, size):
+        """rfile.read 可能短读，循环补齐"""
+        buf = bytearray()
+        while len(buf) < size:
+            chunk = self.rfile.read(size - len(buf))
+            if not chunk:
+                raise self._chunk_error("块数据不完整：期望 %d 字节，实收 %d" % (size, len(buf)))
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def _chunk_error(self, reason):
+        self.close_connection = True
+        return ApiError(400, "分块请求体格式错误：%s" % reason)
 
     # ---------- 入口 ----------
 
@@ -141,8 +208,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query_all = parse_qs(parsed.query, keep_blank_values=True)
-        body_raw = self._read_body()
         scenario_name = self._scenario_of(path)
+        body_error = None
+        try:
+            body_raw = self._read_body()
+        except ApiError as exc:
+            body_raw, body_error = "", exc
 
         entry = None
         if not path.startswith("/__admin") and path != "/health":
@@ -162,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         try:
+            if body_error is not None:
+                raise body_error
             resp = self._route(method, path, query_all, body_raw, scenario_name)
         except ApiError as exc:
             resp = error_resp(exc.status, exc.message, exc.headers)
