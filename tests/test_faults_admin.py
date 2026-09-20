@@ -1,0 +1,179 @@
+# -*- coding: utf-8 -*-
+"""E 类故障场景 + admin 接口 + 405 行为自测。"""
+
+import time
+import unittest
+
+from .support import ProviderTestCase, request
+
+
+class FaultsTest(ProviderTestCase):
+
+    def url(self, path):
+        return "%s/s/faults%s" % (self.base, path)
+
+    def test_always_500(self):
+        resp = request(self.url("/always-500"))
+        self.assertEqual(500, resp.status)
+        self.assertEqual(500, resp.json["code"])
+
+    def test_flaky_fails_twice_then_succeeds(self):
+        statuses = [request(self.url("/flaky")).status for _ in range(3)]
+        self.assertEqual([503, 503, 200], statuses)
+        # 复位后重新从第 1 次开始
+        request(self.base + "/__admin/reset", method="POST")
+        self.assertEqual(503, request(self.url("/flaky")).status)
+
+    def test_rate_limit_alternates_with_retry_after(self):
+        first = request(self.url("/rate-limit"))
+        self.assertEqual(429, first.status)
+        self.assertEqual("2", first.headers.get("Retry-After"))
+        self.assertEqual(200, request(self.url("/rate-limit")).status)
+
+    def test_biz_error_is_http_200(self):
+        resp = request(self.url("/biz-error"))
+        self.assertEqual(200, resp.status)
+        self.assertEqual(5001, resp.json["code"])
+
+    def test_slow_actually_sleeps(self):
+        started = time.time()
+        resp = request(self.url("/slow"), query={"seconds": "1"})
+        self.assertEqual(200, resp.status)
+        self.assertGreaterEqual(time.time() - started, 1.0)
+        self.assertEqual(1, resp.json["data"]["slept"])
+
+    def test_not_json_returns_html(self):
+        resp = request(self.url("/not-json"))
+        self.assertEqual(200, resp.status)
+        self.assertIn("text/html", resp.headers["Content-Type"])
+        self.assertIn("gateway error", resp.text)
+
+    def test_huge_response_exceeds_3mb(self):
+        resp = request(self.url("/huge"))
+        self.assertEqual(200, resp.status)
+        self.assertGreater(len(resp.text), 3 * 1024 * 1024)
+
+    def test_drifted_drops_and_adds_fields(self):
+        rows = request(self.url("/drifted")).json["data"]["items"]
+        self.assertTrue(all("price" not in r for r in rows))
+        self.assertTrue(all(r["extra_note"] == "新增字段" for r in rows))
+
+    def test_redirect_is_302_and_not_followed(self):
+        resp = request(self.url("/redirect"))
+        self.assertEqual(302, resp.status)
+        self.assertEqual("/s/faults/ok", resp.headers["Location"])
+        self.assertEqual(200, request(self.url("/ok")).status)
+
+    def test_counters_are_reset(self):
+        request(self.url("/flaky"))
+        state = request(self.base + "/__admin/state").json
+        self.assertEqual(1, state["faultCounters"]["flaky"])
+        request(self.base + "/__admin/reset", method="POST")
+        state = request(self.base + "/__admin/state").json
+        self.assertEqual({}, state["faultCounters"])
+
+
+class AdminTest(ProviderTestCase):
+
+    def test_health(self):
+        resp = request(self.base + "/health")
+        self.assertEqual(200, resp.status)
+        self.assertEqual({"status": "ok"}, resp.json)
+
+    def test_requests_log_records_headers_query_cookies_and_body(self):
+        entry = self.scenario("fixed-param")
+        request(entry["baseUrl"] + "/items", query={"sign": "test-sign"},
+                headers={"X-App-Id": "app-001"}, cookies={"tenant": "t-001"})
+        logged = self.requests_of("fixed-param")
+        self.assertEqual(1, len(logged))
+        row = logged[0]
+        self.assertEqual("GET", row["method"])
+        self.assertEqual("test-sign", row["query"]["sign"])
+        self.assertEqual("app-001", row["headers"]["X-App-Id"])
+        self.assertEqual("t-001", row["cookies"]["tenant"])
+        self.assertEqual(200, row["status"])
+        self.assertEqual(1, row["seq"])
+
+    def test_requests_log_records_body_and_failed_status(self):
+        item = self.endpoint("body-page", "/products/query", method="POST")
+        request(item["url"], method="POST", json_body={"page": "1", "size": 20})
+        row = self.requests_of("body-page")[-1]
+        self.assertEqual(400, row["status"])
+        self.assertIn('"page": "1"', row["body"])
+
+    def test_reset_clears_request_log(self):
+        request(self.scenario("none")["baseUrl"] + "/items")
+        self.assertEqual(1, len(self.requests_of("none")))
+        request(self.base + "/__admin/reset", method="POST")
+        self.assertEqual(0, len(self.requests_of("none")))
+
+    def test_requests_filter_and_limit(self):
+        none_url = self.scenario("none")["baseUrl"] + "/items"
+        for _ in range(3):
+            request(none_url)
+        request(self.scenario("root-array")["baseUrl"] + "/warehouses")
+        self.assertEqual(3, len(self.requests_of("none")))
+        resp = request("%s/__admin/requests?scenario=none&limit=2" % self.base)
+        self.assertEqual(3, resp.json["matched"])
+        self.assertEqual(2, resp.json["returned"])
+        # 按时间顺序返回最近的若干条
+        seqs = [r["seq"] for r in resp.json["requests"]]
+        self.assertEqual(sorted(seqs), seqs)
+
+    def test_admin_requests_rejects_bad_limit(self):
+        resp = request("%s/__admin/requests?limit=abc" % self.base)
+        self.assertEqual(400, resp.status)
+
+    def test_admin_endpoints_are_not_logged(self):
+        request(self.base + "/__admin/scenarios")
+        request(self.base + "/health")
+        resp = request("%s/__admin/requests?limit=1000" % self.base)
+        self.assertEqual(0, resp.json["matched"])
+
+    def test_scenarios_catalog_shape(self):
+        catalog = self.catalog()
+        self.assertEqual(33, len(catalog))
+        for name, entry in catalog.items():
+            with self.subTest(scenario=name):
+                self.assertTrue(entry["openapiUrl"].endswith("/openapi.json"))
+                self.assertIn("type", entry["auth"])
+                self.assertIsInstance(entry["auth"]["extraAuthParams"], list)
+                for item in entry["endpoints"]:
+                    self.assertIn(item["role"], ("DATA", "TOKEN", "FAULT"))
+                    self.assertIn(item["paginationType"],
+                                  ("NONE", "PAGE_NUMBER", "OFFSET", "CURSOR", "NEXT_URL"))
+                    if item["role"] == "DATA" and item["expectedTotal"]:
+                        self.assertTrue(item["sampleFirst3"] is None
+                                        or len(item["sampleFirst3"]) <= 3)
+
+    def test_token_endpoints_are_marked_as_token_role(self):
+        for name in ("bearer-request", "oauth2-post", "oauth2-basic"):
+            roles = {i["path"]: i["role"] for i in self.scenario(name)["endpoints"]}
+            self.assertEqual("DATA", roles["/items"])
+            token_path = "/login" if name.startswith("bearer") else "/oauth/token"
+            self.assertEqual("TOKEN", roles[token_path])
+
+    def test_write_methods_are_405_everywhere(self):
+        targets = [self.base + "/s/none/items",
+                   self.base + "/s/page-number/products",
+                   self.base + "/s/faults/ok",
+                   self.base + "/__admin/reset"]
+        for url in targets:
+            for method in ("PUT", "PATCH", "DELETE"):
+                with self.subTest(url=url, method=method):
+                    resp = request(url, method=method)
+                    self.assertEqual(405, resp.status)
+                    self.assertEqual("GET, POST", resp.headers["Allow"])
+
+    def test_unknown_scenario_and_endpoint_return_404(self):
+        self.assertEqual(404, request(self.base + "/s/nope/items").status)
+        self.assertEqual(404, request(self.base + "/s/none/nope").status)
+        self.assertEqual(404, request(self.base + "/nope").status)
+
+    def test_wrong_method_on_existing_path_returns_405(self):
+        resp = request(self.base + "/s/none/items", method="POST")
+        self.assertEqual(405, resp.status)
+
+
+if __name__ == "__main__":
+    unittest.main()
