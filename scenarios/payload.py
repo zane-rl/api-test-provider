@@ -10,26 +10,8 @@ from datetime import timedelta
 from .common import (
     Endpoint, Scenario, NO_AUTH, ApiError,
     build_dataset, build_record, iso, BASE_TIME,
-    json_resp, qp, json_body,
+    json_resp, qp, json_body, json_type_of,
 )
-
-
-def _json_type(value):
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, list):
-        return "array"
-    if isinstance(value, dict):
-        return "object"
-    return "unknown"
 
 
 # ==================== echo：请求原样回显 ====================
@@ -54,7 +36,7 @@ def _scenario_echo():
             "id": "ECHOBODY-00001",
             "received_body": body,
             "raw_body": ctx.body_raw,
-            "types": {k: _json_type(v) for k, v in body.items()},
+            "types": {k: json_type_of(v) for k, v in body.items()},
         }
         return json_resp({"code": 0, "message": "ok", "data": {"items": [record]}})
 

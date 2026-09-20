@@ -3,7 +3,7 @@
 
 from collections import OrderedDict
 
-from . import auth, pagination, payload, depend, faults
+from . import auth, pagination, payload, depend, faults, typemismatch
 from .common import reset_tokens
 
 GROUPS = [
@@ -12,6 +12,7 @@ GROUPS = [
     ("C 请求与响应", payload),
     ("D 依赖", depend),
     ("E 故障", faults),
+    ("F 类型不一致", typemismatch),
 ]
 
 

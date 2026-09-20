@@ -495,7 +495,7 @@ class Endpoint:
                  auth=True, role="DATA", pagination=None, record_path=None,
                  primary_key=None, dataset=None, expected_total=None,
                  doc_sample=None, response_schema=None, response_example=None,
-                 extra_responses=None, note=""):
+                 extra_responses=None, note="", extra_catalog=None):
         self.method = method.upper()
         self.path = path
         self.handler = handler
@@ -516,6 +516,8 @@ class Endpoint:
         self.response_example = response_example
         self.extra_responses = extra_responses or {}
         self.note = note
+        # 额外写进 /__admin/scenarios 的字段，给场景放自己的专有元数据用
+        self.extra_catalog = dict(extra_catalog or {})
         self.segments = [s for s in path.split("/") if s != ""]
 
     def match(self, segments):
@@ -565,6 +567,7 @@ class Endpoint:
         if (self.doc_sample or {}).get("path"):
             # 路径参数的可用样例值，供测试直接拼出可访问的地址
             item["pathSample"] = dict(self.doc_sample["path"])
+        item.update(self.extra_catalog)
         return item
 
 
@@ -686,6 +689,25 @@ def _clean(schema):
         else:
             out[k] = v
     return out
+
+
+def json_type_of(value):
+    """一个 JSON 值的类型名，口径与 OpenAPI 的 type 对齐"""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "unknown"
 
 
 def truncate_example(value, max_items=2, max_depth=8, _depth=0):

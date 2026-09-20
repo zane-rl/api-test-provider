@@ -83,8 +83,8 @@ class OpenApiTest(ProviderTestCase):
                         self.assertNotIn(resp.status, (404, 405),
                                          "文档声明的 %s %s 打不通：%s"
                                          % (method.upper(), path, resp.text[:200]))
-                        self._assert_no_schema_drift(operation, resp)
-        self.assertEqual(65, checked, "端点总数变了，请同步 README")
+                        self._assert_no_schema_drift(entry, operation, resp)
+        self.assertEqual(73, checked, "端点总数变了，请同步 README")
 
     def _call_declared(self, entry, item, operation, auth):
         url = item["url"]
@@ -109,11 +109,20 @@ class OpenApiTest(ProviderTestCase):
         return request(url, method=item["method"], headers=headers, query=query,
                        cookies=cookies, json_body=body, body=raw)
 
-    def _assert_no_schema_drift(self, operation, resp):
+    # 唯一一个「文档与实现故意不一致」的场景，见 scenarios/typemismatch.py 的模块注释
+    INTENTIONAL_MISMATCH = {"type-mismatch"}
+
+    def _assert_no_schema_drift(self, entry, operation, resp):
         """200 响应里出现的顶层字段都必须在文档里声明过（防止显式声明的 schema 漂移）。
 
         反向不成立：文档可以声明可选字段（如 OAuth2 的 scope），响应里不一定出现。
+
+        `type-mismatch` 场景豁免：它的 schema 是手写的、**故意**与实际返回的字段类型对不上，
+        那正是它存在的意义（给后端的「验证接口时比对字段类型」提供对端）。
+        它的可达性仍然照常校验，类型上的一致性由 tests/test_type_mismatch.py 正面断言。
         """
+        if entry["name"] in self.INTENTIONAL_MISMATCH:
+            return
         if resp.status != 200 or "application/json" not in resp.headers.get("Content-Type", ""):
             return
         schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
