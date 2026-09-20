@@ -42,6 +42,33 @@ class FaultsTest(ProviderTestCase):
         self.assertGreaterEqual(time.time() - started, 1.0)
         self.assertEqual(1, resp.json["data"]["slept"])
 
+    def test_slow_returns_deterministic_records(self):
+        """慢响应端点必须给真实数据：后端要从中推断记录结构"""
+        item = self.endpoint("faults", "/slow")
+        self.assertEqual("FAULT", item["role"])
+        self.assertEqual("data.items", item["recordPath"])
+        self.assertEqual("id", item["primaryKey"])
+        self.assertEqual(5, item["expectedTotal"])
+
+        payload = request(self.url("/slow"), query={"seconds": "0"}).json
+        rows = payload["data"]["items"]
+        self.assertEqual(5, len(rows))
+        self.assertTrue(all(r["id"].startswith("SLOW-") for r in rows), rows[0]["id"])
+        self.assertEqual(len(rows), len({r["id"] for r in rows}))
+        self.assertEqual(item["sampleFirst3"], rows[:3])
+        self.assertEqual(5, payload["data"]["total"])
+        # 确定性：两次调用完全一致
+        self.assertEqual(payload, request(self.url("/slow"), query={"seconds": "0"}).json)
+
+    def test_slow_openapi_declares_record_structure_and_param(self):
+        doc = request(self.base + "/s/faults/openapi.json").json
+        operation = doc["paths"]["/slow"]["get"]
+        self.assertEqual({"seconds"}, {p["name"] for p in operation["parameters"]})
+        schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+        record = schema["properties"]["data"]["properties"]["items"]["items"]["properties"]
+        for field in ("id", "name", "price", "quantity", "active", "updated_at", "spec"):
+            self.assertIn(field, record)
+
     def test_not_json_returns_html(self):
         resp = request(self.url("/not-json"))
         self.assertEqual(200, resp.status)

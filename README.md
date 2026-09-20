@@ -169,7 +169,7 @@ tests/                      标准库 unittest
 |  |  | `GET /flaky`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /biz-error`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /rate-limit`<br>FAULT |  | NONE | `data.items` | `id` | — |
-|  |  | `GET /slow`<br>FAULT |  | NONE | `data.items` | `id` | — |
+|  |  | `GET /slow`<br>FAULT |  | NONE | `data.items` | `id` | 5 |
 |  |  | `GET /not-json`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /huge`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /drifted`<br>FAULT |  | NONE | `data.items` | `id` | — |
@@ -325,7 +325,7 @@ tests/                      标准库 unittest
 - 只支持 HTTP，没有 HTTPS / mTLS 场景。
 - `suppliers-crosshost` 的「异源」靠 `localhost` 与 `127.0.0.1` 的主机名差异构造，二者解析到同一进程；
   如果后端按 IP 而不是按主机名判同源，这个场景不会触发拒绝。
-- 故障类端点没有进 `expectedTotal` 体系（它们的返回随调用次数变化），需要逐条按 README 的表断言。
+- 故障类端点大多没有进 `expectedTotal` 体系（返回随调用次数变化），需逐条按上面的表断言；例外是 `/slow` 与 `/ok`，它们恒定返回 5 条真实记录，可以按 `expectedTotal` 断言。
 - `not-json` / `huge` 这类端点的响应体不是常规结构，文档里给的是显式 schema 与示意性 example。
 
 ## 变更记录
@@ -336,3 +336,4 @@ tests/                      标准库 unittest
 | 2026-09-20 | H2：`POST /__admin/reset` 支持 `?scenario=` 按场景复位；新增 `oauth2-expiring`（令牌按时间过期，`expires_in` 默认 40 秒，可由 `/__admin/config` 调）；`/__admin/scenarios` 的 `tokenFlow` 改为实时取配置值。34 个场景 / 61 个端点 / 93 条自测。 |
 | 2026-09-20 | H3：修复 `Transfer-Encoding: chunked` 请求体读不到的缺陷（JDK HttpClient 默认走分块，原来只认 `Content-Length`，令牌 / 登录请求体被读成空串）；新增 `oauth2-paged-maxuses` 与 `oauth2-paged-expiring` 两个分页 OAuth2 场景（各 50 条 5 页）；配置项改为按键校验取值范围。36 个场景 / 65 个端点 / 117 条自测。 |
 | 2026-09-20 | H4：`oauth2-paged-expiring` 的默认每页延迟 3 秒 → **6 秒**（ttl 保持 35），使第 4 页发起前越过后端「短效令牌按一半有效期复用」的 17.5 秒窗口；期望改为「令牌端点 2 次、5 次业务请求全 200、无 401」，并在 README 写明该窗口规则。 |
+| 2026-09-20 | H5：`faults` 的 `GET /slow` 由返回空 `items` 改为返回 **5 条**确定性记录（id 前缀 `SLOW-`，结构与其它列表端点一致），延迟行为不变；其 200 schema 改为由真实响应推断（生成文档时靠 `doc_mode` 跳过 sleep），清单补 `recordPath` / `primaryKey` / `expectedTotal: 5`。 |

@@ -16,6 +16,8 @@ from .common import (
 )
 
 FAULT_ROWS = build_dataset("FLT", 5)
+# 慢响应端点单独一份数据：后端要从这里推断记录结构，不能是空数组
+SLOW_ROWS = build_dataset("SLOW", 5)
 
 _counters = {}
 _lock = threading.Lock()
@@ -79,9 +81,12 @@ def build_scenarios():
 
     def slow(ctx):
         seconds = max(0, min(ctx.int_query("seconds", 5), 60))
-        time.sleep(seconds)
+        # doc_mode 是生成文档时的假上下文，在那里 sleep 会把取文档拖住
+        if seconds and not ctx.doc_mode:
+            time.sleep(seconds)
         return json_resp({"code": 0, "message": "ok",
-                          "data": {"items": [], "total": 0, "slept": seconds}})
+                          "data": {"items": SLOW_ROWS, "total": len(SLOW_ROWS),
+                                   "slept": seconds}})
 
     def not_json(ctx):
         return Resp(status=200, raw=b"<html><body>gateway error</body></html>",
@@ -133,16 +138,18 @@ def build_scenarios():
         fault("/rate-limit", rate_limit, "listRateLimited", "隔次 429 + Retry-After",
               "奇数次返回 429 并带 Retry-After: 2，偶数次成功",
               example=_ok_payload(FAULT_ROWS[:3]), note="计数器 rate-limit，可 reset 复位"),
-        fault("/slow", slow, "listSlow", "慢响应",
-              "按 seconds 参数延迟后返回（上限 60 秒），验证超时配置",
-              parameters=[qp("seconds", "integer", description="延迟秒数，默认 5，上限 60")],
-              schema={"type": "object", "properties": {
-                  "code": {"type": "integer"}, "message": {"type": "string"},
-                  "data": {"type": "object", "properties": {
-                      "items": {"type": "array", "items": {"type": "object"}},
-                      "total": {"type": "integer"}, "slept": {"type": "integer"}}}}},
-              example={"code": 0, "message": "ok",
-                       "data": {"items": [], "total": 0, "slept": 5}}),
+        # 与其它故障端点不同：这个要返回真实数据，后端得从中推断记录结构才能走完整条链路。
+        # 它没有计数器之类的副作用，所以 schema 交给「真的调一次处理函数」去推断。
+        Endpoint("GET", "/slow", slow,
+                 operation_id="listSlow", summary="慢响应（数据正常）",
+                 description="按 seconds 参数延迟后返回 %d 条记录（上限 60 秒），验证超时配置；"
+                             "响应结构与其它列表端点一致" % len(SLOW_ROWS),
+                 role="FAULT",
+                 parameters=[qp("seconds", "integer", description="延迟秒数，默认 5，上限 60")],
+                 record_path="data.items", primary_key="id",
+                 dataset=lambda: list(SLOW_ROWS),
+                 doc_sample={"query": {"seconds": "0"}},
+                 note="延迟可控，数据恒定 %d 条" % len(SLOW_ROWS)),
         fault("/not-json", not_json, "listNotJson", "返回 HTML 而不是 JSON",
               "验证「响应不是合法 JSON」的提示",
               schema={"type": "string"}, example="<html><body>gateway error</body></html>"),
