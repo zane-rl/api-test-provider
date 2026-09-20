@@ -32,8 +32,11 @@ CONFIG = {
     "oauth2BasicTokenMaxUses": 2,         # oauth2-basic：令牌可用次数，第 N+1 次业务请求 401
     "oauth2ExpiringTokenTtlSeconds": 40,  # oauth2-expiring：令牌有效秒数
     "oauth2PagedTokenMaxUses": 2,         # oauth2-paged-maxuses：同上，用于分页批次内触发 401 重取
-    "oauth2PagedTtlSeconds": 35,          # oauth2-paged-expiring：令牌有效秒数
-    "oauth2PagedDelaySeconds": 3,         # oauth2-paged-expiring：每个业务请求的服务端延迟
+    # oauth2-paged-expiring：令牌有效秒数。**别调过 60**——后端对 >60 秒的长效令牌
+    # 换用「过期前 30 秒」规则，这个场景就观察不到目标现象了
+    "oauth2PagedTtlSeconds": 35,
+    # oauth2-paged-expiring：每个业务请求的服务端延迟。取 6 秒是算过的，见下方场景注册处
+    "oauth2PagedDelaySeconds": 6,
 }
 _CONFIG_LOCK = threading.Lock()
 
@@ -431,10 +434,19 @@ def build_scenarios():
             "oauth2-paged-expiring", "OAuth2 分页（令牌按时间过期 + 每页延迟）",
             "一个批次内令牌临近过期：后端应主动重取，不应出现 401",
             ttl_key="oauth2PagedTtlSeconds", delay_key="oauth2PagedDelaySeconds",
-            flow_note="令牌有效 35 秒（oauth2PagedTtlSeconds 可调）；每个业务请求服务端延迟 3 秒"
-                      "（oauth2PagedDelaySeconds 可调），到第 3 页前后令牌剩余不足 30 秒",
-            items_note="期望：令牌端点被请求 >=2 次、所有业务请求均为 200 且无任何 401、"
-                       "最终 50 条无重复"),
+            # 参数是按后端的复用窗口算出来的：有效期 <=60 秒的短效令牌按**一半有效期**复用
+            # （35 秒 → 17.5 秒后才重取），>60 秒的长效令牌才是「过期前 30 秒」。
+            # 延迟 6 秒 → 5 页的发起时刻是 0/6/12/18/24 秒，第 4 页发起前 18 > 17.5 触发主动重取；
+            # 全程 30 秒 < 有效期 35 秒，所以即使不重取也不会 401——「无 401」才干净地证明
+            # 是主动重取，而不是撞了 401 之后重放救回来的。
+            flow_note="令牌有效 35 秒（oauth2PagedTtlSeconds 可调，**别调过 60**：后端对长效令牌"
+                      "换用「过期前 30 秒」规则）；每个业务请求服务端延迟 6 秒"
+                      "（oauth2PagedDelaySeconds 可调）。短效令牌按一半有效期复用，"
+                      "即 17.5 秒后才该重取",
+            items_note="期望：令牌端点被请求 2 次、5 次业务请求全部 200、无任何 401、"
+                       "最终 50 条无重复。5 页的发起时刻为 0/6/12/18/24 秒，第 4 页发起前"
+                       "已过 18 秒（>17.5 的复用窗口）应触发主动重取；全程 30 秒短于有效期 35 秒，"
+                       "所以「无 401」只可能来自主动重取，不是撞 401 后重放"),
         _simple("fixed-param", "固定参数鉴权（三个位置）",
                 "FIXED_PARAM：Header + Query + Cookie 同时必填",
                 AuthSpec(kind="fixedParam", requirements=[

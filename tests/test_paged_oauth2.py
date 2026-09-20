@@ -48,14 +48,14 @@ class PagedOauth2CatalogTest(ProviderTestCase):
         self.assertNotIn("tokenMaxUses", expiring)
 
     def test_page_delay_is_declared_only_for_expiring_scenario(self):
-        self.assertEqual(3, self.endpoint("oauth2-paged-expiring", "/items")
+        self.assertEqual(6, self.endpoint("oauth2-paged-expiring", "/items")
                          ["pagination"]["pageDelaySeconds"])
         self.assertNotIn("pageDelaySeconds",
                          self.endpoint("oauth2-paged-maxuses", "/items")["pagination"])
 
     def test_page_size_override_changes_page_count(self):
         self.set_config(oauth2PagedDelaySeconds=0)
-        self.addCleanup(self.set_config, oauth2PagedDelaySeconds=3)
+        self.addCleanup(self.set_config, oauth2PagedDelaySeconds=6)
         entry = self.scenario("oauth2-paged-expiring")
         token = obtain_token(entry["baseUrl"], entry["auth"]["tokenFlow"])
         payload = request(entry["baseUrl"] + "/items", headers=_bearer(token),
@@ -158,7 +158,7 @@ class PagedExpiringTest(ProviderTestCase):
         super().setUp()
         # 自测把有效期与延迟调小，只验服务端行为，别让用例变慢
         self.set_config(oauth2PagedTtlSeconds=2, oauth2PagedDelaySeconds=0)
-        self.addCleanup(self.set_config, oauth2PagedTtlSeconds=35, oauth2PagedDelaySeconds=3)
+        self.addCleanup(self.set_config, oauth2PagedTtlSeconds=35, oauth2PagedDelaySeconds=6)
 
     def test_proactive_refetch_avoids_any_401(self):
         """模拟后端：每页前判断令牌剩余不足就重取——全程无 401"""

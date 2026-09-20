@@ -70,7 +70,7 @@ class OpenApiTest(ProviderTestCase):
         checked = 0
         # oauth2-paged-expiring 的数据接口默认延迟 3 秒，这里只关心可达性
         self.set_config(oauth2PagedDelaySeconds=0)
-        self.addCleanup(self.set_config, oauth2PagedDelaySeconds=3)
+        self.addCleanup(self.set_config, oauth2PagedDelaySeconds=6)
         for entry, doc in self.docs():
             auth = build_auth(entry) if entry["auth"]["credentials"] else None
             by_key = {(i["method"], i["path"]): i for i in entry["endpoints"]}

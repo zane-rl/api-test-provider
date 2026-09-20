@@ -23,7 +23,7 @@ class AuthScenarioTest(ProviderTestCase):
         self.set_config(oauth2PagedDelaySeconds=0)
 
     def tearDown(self):
-        self.set_config(oauth2PagedDelaySeconds=3)
+        self.set_config(oauth2PagedDelaySeconds=6)
 
     def _auth_scenarios(self):
         return [s for s in self.catalog().values() if s["group"] == "A 鉴权"]

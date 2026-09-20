@@ -191,10 +191,24 @@ tests/                      标准库 unittest
 | `oauth2-expiring` `/oauth/token` | 令牌**按时间过期**：`expires_in` 返回实际有效秒数（默认 40），到点后业务请求 401。用于验证后端「距过期不足 30 秒提前重取」——拿到令牌后等约 15 秒再发请求，应看到令牌端点被请求 2 次且业务请求无 401 |
 | `oauth2-extra` `/oauth/token` | 令牌请求带了附加鉴权参数 `X-App-Key` 返回 400（后端约定：令牌请求不带附加参数） |
 | `oauth2-paged-maxuses` `/items` | 页码分页 50 条（5 页），令牌**最多用于 2 次业务请求**。期望：一次完整同步 5 次成功的业务请求 → 令牌端点被请求 **3** 次、业务请求出现 **2** 次 401 且每次之后紧跟一次**同页重放**成功、最终 50 条无重复 |
-| `oauth2-paged-expiring` `/items` | 同上 50 条 5 页，令牌按时间过期（默认 35 秒），且**每个业务请求服务端固定延迟 3 秒**（`pageDelaySeconds`）。于是第 3 页前后令牌剩余不足 30 秒。期望：令牌端点被请求 **≥2** 次、**所有业务请求均为 200 且无任何 401**、最终 50 条无重复 |
+| `oauth2-paged-expiring` `/items` | 同上 50 条 5 页，令牌按时间过期（默认 **35** 秒），且**每个业务请求服务端固定延迟 6 秒**（`pageDelaySeconds`）。期望：令牌端点被请求 **2** 次、**5 次业务请求全部 200、无任何 401**、最终 50 条无重复。参数是按后端的复用窗口算的，见下方 |
 | `apikey-header-prefix` | `Authorization` 的值必须是 `Token test-key-123`，无前缀或前缀不符 401，错误消息里点名「缺少前缀 Token」 |
 | `forbidden` `/secret-items` | 凭证正确也恒定 403；无凭证仍是 401 |
 | 所有场景 | `PUT` / `PATCH` / `DELETE` 一律 405 + `Allow: GET, POST` |
+
+> **为什么 `oauth2-paged-expiring` 是 ttl 35 秒 + 每页延迟 6 秒**
+>
+> 后端的令牌复用窗口不是简单的「过期前 30 秒」：**有效期 ≤60 秒的短效令牌按一半有效期复用**
+> （ttl=35 → 17.5 秒后才重取），有效期 >60 秒的长效令牌才走「过期前 30 秒」。
+>
+> 延迟 6 秒时，5 页的请求发起时刻是 **0 / 6 / 12 / 18 / 24 秒**：第 4 页发起前已过 18 秒
+> （> 17.5 秒的复用窗口），后端应**主动重取**；而全程 30 秒 < 有效期 35 秒，
+> 所以**即使后端不重取也不会出现 401**。正因如此，「令牌端点 2 次 + 全程无 401」
+> 才能干净地证明是主动重取，而不是撞了 401 之后重放救回来的。
+>
+> **别把 `oauth2PagedTtlSeconds` 调过 60**——那会切到长效令牌的规则，这个场景就观察不到目标现象了。
+> 早先的默认值是每页 3 秒（发起时刻 0/3/6/9/12 秒，全在复用窗口内），后端不重取是正确行为，
+> 场景等于白跑。
 
 ### 依赖类的条数公式
 
@@ -235,7 +249,7 @@ tests/                      标准库 unittest
 | `GET /__admin/requests?scenario=<名字>&limit=<N>` | 服务端实际收到的请求日志，按时间顺序；含序号、方法、路径、解码后的 Query、`rawQuery`、全部请求头、Cookie、原始请求体、响应状态码。内存最多保留最近 5000 条 |
 | `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、已签发令牌与令牌序号。**不改 config** |
 | `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位。场景名不存在返回 404 |
-| `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 3；0 表示不延迟，自测靠它跑快） |
+| `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 6；0 表示不延迟，自测靠它跑快） |
 | `GET /__admin/state` | 当前配置、故障计数器、已签发令牌快照（排查用） |
 
 鉴权描述的结构（`/__admin/scenarios` → `scenarios[].auth`）：
@@ -305,8 +319,9 @@ tests/                      标准库 unittest
   **改配置或跑 `faults` 场景的用例必须独占实例或串行**，其余场景并发跑没问题。
 - 令牌有两种失效方式：按**使用次数**（`oauth2-basic`、`oauth2-paged-maxuses`，可复现）与按**时间**
   （`oauth2-expiring`、`oauth2-paged-expiring`）。其余场景的令牌不失效，`expires_in` 恒为 3600。
-- `oauth2-paged-expiring` 的每页延迟默认 3 秒：跑它的用例会慢，且**它与 `/__admin/config` 一样是进程级的**，
-  并发跑别的用例时把延迟调成 0 会影响到它。
+- `oauth2-paged-expiring` 的每页延迟默认 6 秒（一次完整同步约 30 秒）：跑它的用例会慢，
+  且**它与 `/__admin/config` 一样是进程级的**，并发跑别的用例时把延迟调成 0 会影响到它。
+  建议这个场景的 E2E 独占一个实例。
 - 只支持 HTTP，没有 HTTPS / mTLS 场景。
 - `suppliers-crosshost` 的「异源」靠 `localhost` 与 `127.0.0.1` 的主机名差异构造，二者解析到同一进程；
   如果后端按 IP 而不是按主机名判同源，这个场景不会触发拒绝。
@@ -320,3 +335,4 @@ tests/                      标准库 unittest
 | 2026-09-20 | v1：33 个场景 / 59 个端点 / 84 条自测用例。含 Commander 追加的 4 个鉴权场景（`apikey-header-prefix`、`apikey-extra`、`basic-extra`、`oauth2-extra`）与 `role` / 结构化鉴权配置要求。 |
 | 2026-09-20 | H2：`POST /__admin/reset` 支持 `?scenario=` 按场景复位；新增 `oauth2-expiring`（令牌按时间过期，`expires_in` 默认 40 秒，可由 `/__admin/config` 调）；`/__admin/scenarios` 的 `tokenFlow` 改为实时取配置值。34 个场景 / 61 个端点 / 93 条自测。 |
 | 2026-09-20 | H3：修复 `Transfer-Encoding: chunked` 请求体读不到的缺陷（JDK HttpClient 默认走分块，原来只认 `Content-Length`，令牌 / 登录请求体被读成空串）；新增 `oauth2-paged-maxuses` 与 `oauth2-paged-expiring` 两个分页 OAuth2 场景（各 50 条 5 页）；配置项改为按键校验取值范围。36 个场景 / 65 个端点 / 117 条自测。 |
+| 2026-09-20 | H4：`oauth2-paged-expiring` 的默认每页延迟 3 秒 → **6 秒**（ttl 保持 35），使第 4 页发起前越过后端「短效令牌按一半有效期复用」的 17.5 秒窗口；期望改为「令牌端点 2 次、5 次业务请求全 200、无 401」，并在 README 写明该窗口规则。 |
