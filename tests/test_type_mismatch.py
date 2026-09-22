@@ -47,7 +47,7 @@ class TypeMismatchTest(ProviderTestCase):
         self.assertEqual("none", self.entry["auth"]["type"])
         self.assertEqual([], self.entry["auth"]["credentials"])
         self.assertIn("故意不一致", self.entry["covers"])
-        self.assertEqual(8, len(self.entry["endpoints"]))
+        self.assertEqual(9, len(self.entry["endpoints"]))
         for item in self.entry["endpoints"]:
             with self.subTest(path=item["path"]):
                 self.assertEqual("DATA", item["role"])
@@ -118,6 +118,37 @@ class TypeMismatchTest(ProviderTestCase):
         self.assertIn("date-time", formats)
         rows = request(item["url"]).json["data"]["items"]
         self.assertTrue(any(r["remark"] is None for r in rows), "应覆盖 nullable")
+
+    def test_bool_as_string_covers_four_string_spellings(self):
+        """字符串布尔的四种写法都要出现，且全是字符串而不是真布尔"""
+        rows = request(self.endpoint(SCENARIO, "/bool-as-string")["url"]).json["data"]["items"]
+        values = [r["active"] for r in rows]
+        self.assertTrue(all(isinstance(v, str) for v in values), values)
+        self.assertEqual({"true", "false", "1", "0"}, set(values))
+        note = self.endpoint(SCENARIO, "/bool-as-string")["declaredVsActual"][0]["note"]
+        for spelling in ('"true"', '"false"', '"1"', '"0"'):
+            self.assertIn(spelling, note)
+
+    def test_bool_consistent_is_the_control_group_of_bool_as_string(self):
+        """同一份文档声明，一个返回真布尔、一个返回字符串"""
+        consistent = self.endpoint(SCENARIO, "/bool-as-string-consistent")
+        mismatched = self.endpoint(SCENARIO, "/bool-as-string")
+        # 文档侧完全相同
+        self.assertEqual(self._declared_record_schema("/bool-as-string")["active"],
+                         self._declared_record_schema("/bool-as-string-consistent")["active"])
+        self.assertEqual({"type": "boolean"},
+                         self._declared_record_schema("/bool-as-string-consistent")["active"])
+        # 实际侧：一个真布尔、一个字符串
+        rows = request(consistent["url"]).json["data"]["items"]
+        self.assertEqual(6, len(rows))
+        self.assertTrue(all(isinstance(r["active"], bool) for r in rows))
+        self.assertEqual({True, False}, {r["active"] for r in rows})
+        # 清单：对照组不兼容 = false，字符串版 = true
+        self.assertFalse(consistent["declaredVsActual"][0]["expectIncompatible"])
+        self.assertTrue(mismatched["declaredVsActual"][0]["expectIncompatible"])
+        self.assertEqual("boolean", consistent["declaredVsActual"][0]["actualJsonType"])
+        # 两组记录 id 不串
+        self.assertTrue(all(r["id"].startswith("TMBOOLOK-") for r in rows))
 
     def test_datetime_as_epoch_returns_milliseconds(self):
         rows = request(self.endpoint(SCENARIO, "/datetime-as-epoch")["url"]).json["data"]["items"]

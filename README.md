@@ -186,6 +186,7 @@ tests/                      标准库 unittest
 | **type-mismatch** | 验证接口时把真实响应与已保存字段类型做兼容性比对：文档声明与实际返回故意不一致（全项目唯一，含 2 个不该判不兼容的负例与 1 个对照组） | `GET /number-as-string`<br>DATA | 无 | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /string-as-number`<br>DATA |  | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /bool-as-string`<br>DATA |  | NONE | `data.items` | `id` | 6 |
+|  |  | `GET /bool-as-string-consistent`<br>DATA |  | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /datetime-as-epoch`<br>DATA |  | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /object-as-string`<br>DATA |  | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /int-vs-decimal`<br>DATA |  | NONE | `data.items` | `id` | 6 |
@@ -220,11 +221,18 @@ tests/                      标准库 unittest
 > 它存在的理由：后端「验证接口」时会把真实响应与已保存的字段类型做兼容性比对，不兼容就在
 > 验证阶段报告，而不是等首次同步才失败。这里给它一个能稳定触发的对端。
 >
-> 8 个端点 = **5 个正例**（数值声明成字符串、字符串声明成数值、布尔声明成字符串、
+> 9 个端点 = **5 个正例**（数值声明成字符串、字符串声明成数值、布尔声明成字符串、
 > date-time 实际返回毫秒时间戳、object 实际返回 JSON 文本）+ **2 个负例**
 > （`int-vs-decimal`：整数声明 vs 小数实际；`nullable-mostly-null`：6 条里 5 条 null）
-> + **1 个对照组**（`/consistent`，完全一致）。两个负例**预期不判不兼容**，
-> 是用来挡住「把类型比对做得过于严格」的。
+> + **2 个对照组**（`/consistent` 全字段一致；`/bool-as-string-consistent` 见下）。
+> 两个负例**预期不判不兼容**，是用来挡住「把类型比对做得过于严格」的。
+>
+> **布尔专用对照**：`/bool-as-string` 与 `/bool-as-string-consistent` 用**同一份文档声明**
+> （`active: boolean`），前者实际返回字符串、后者返回真布尔。用来复现「字段被判为 BOOLEAN，
+> 接口实际给字符串，写进中间库后下游 Flink 读取报 `String cannot be cast to Boolean`」——
+> 真布尔时下游正常、字符串时出问题。`/bool-as-string` 的 6 条取值依次是
+> `"true"` `"false"` `"1"` `"0"` `"true"` `"false"`，**四种常见的布尔字符串写法都覆盖到**，
+> 因为「字符串转布尔」的兼容逻辑常常只认其中一种。
 >
 > 每个端点在 `/__admin/scenarios` 里带 `declaredVsActual`，E2E 直接取它当期望：
 > `[{field, declaredType, declaredFormat, actualJsonType, expectIncompatible}]`。
@@ -372,3 +380,4 @@ tests/                      标准库 unittest
 | 2026-09-20 | H4：`oauth2-paged-expiring` 的默认每页延迟 3 秒 → **6 秒**（ttl 保持 35），使第 4 页发起前越过后端「短效令牌按一半有效期复用」的 17.5 秒窗口；期望改为「令牌端点 2 次、5 次业务请求全 200、无 401」，并在 README 写明该窗口规则。 |
 | 2026-09-20 | H5：`faults` 的 `GET /slow` 由返回空 `items` 改为返回 **5 条**确定性记录（id 前缀 `SLOW-`，结构与其它列表端点一致），延迟行为不变；其 200 schema 改为由真实响应推断（生成文档时靠 `doc_mode` 跳过 sleep），清单补 `recordPath` / `primaryKey` / `expectedTotal: 5`。 |
 | 2026-09-20 | H6：新增 `type-mismatch` 场景（8 个端点，5 正例 + 2 负例 + 1 对照组），**全项目唯一刻意让文档与实现不一致**的场景，供后端「验证接口时比对字段类型」使用；清单新增 `declaredVsActual`；`Endpoint` 新增通用的 `extra_catalog` 机制。37 个场景 / 73 个端点 / 127 条自测。 |
+| 2026-09-22 | H7：`type-mismatch` 新增 `/bool-as-string-consistent`（与 `/bool-as-string` 同一份文档声明、实际返回真布尔），用于复现下游 `String cannot be cast to Boolean`；`/bool-as-string` 的取值扩到 `"true"` / `"false"` / `"1"` / `"0"` 四种写法。37 个场景 / 74 个端点 / 129 条自测。 |

@@ -42,7 +42,12 @@ def _epoch_ms(i):
 
 NUMBER_AS_STRING = _rows("TMNUM", lambda i: {"quantity": i * 12})
 STRING_AS_NUMBER = _rows("TMSTR", lambda i: {"amount": "%.2f" % (12.5 * i)})
-BOOL_AS_STRING = _rows("TMBOOL", lambda i: {"active": "true" if i % 2 else "false"})
+# 布尔字符串的四种常见写法都要出现：下游按 BOOLEAN 读时 "1"/"0" 与 "true"/"false" 一样会炸，
+# 而「把字符串转布尔」的兼容逻辑常常只认其中一种写法
+BOOL_STRING_VALUES = ["true", "false", "1", "0", "true", "false"]
+BOOL_AS_STRING = _rows("TMBOOL", lambda i: {"active": BOOL_STRING_VALUES[i - 1]})
+# 对照组：同一份文档声明（active: boolean），实际也返回真布尔——下游应当正常
+BOOL_AS_BOOL = _rows("TMBOOLOK", lambda i: {"active": i % 2 == 1})
 DATETIME_AS_EPOCH = _rows("TMDATE", lambda i: {"updated_at": _epoch_ms(i)})
 OBJECT_AS_STRING = _rows("TMOBJ", lambda i: {
     "extra": json.dumps({"color": COLORS[i % len(COLORS)], "size": i}, ensure_ascii=False)})
@@ -137,8 +142,17 @@ def build_scenarios():
         _endpoint(
             "/bool-as-string", "listBoolAsString", "查询数据（字符串字段被声明为布尔）",
             BOOL_AS_STRING, _declared(active={"type": "boolean"}),
-            [_cmp("active", "boolean", "string", True)],
-            "文档声明 active 为 boolean，实际返回 「true」/「false」 字符串"),
+            [_cmp("active", "boolean", "string", True,
+                  note="取值覆盖 \"true\" / \"false\" / \"1\" / \"0\" 四种布尔字符串写法")],
+            "文档声明 active 为 boolean，实际返回字符串，取值覆盖 「true」「false」「1」「0」 四种写法"),
+        _endpoint(
+            "/bool-as-string-consistent", "listBoolAsStringConsistent",
+            "查询数据（布尔字段对照组：实际也是真布尔）",
+            BOOL_AS_BOOL, _declared(active={"type": "boolean"}),
+            [_cmp("active", "boolean", "boolean", False,
+                  note="对照组：与 /bool-as-string 同一份文档声明，实际返回真布尔，下游应当正常")],
+            "与 /bool-as-string 同一份文档声明（active 为 boolean），实际也返回真布尔。"
+            "两者对照：真布尔时下游正常、字符串时下游读取报类型转换错误"),
         _endpoint(
             "/datetime-as-epoch", "listDatetimeAsEpoch", "查询数据（时间字段返回毫秒时间戳）",
             DATETIME_AS_EPOCH,
