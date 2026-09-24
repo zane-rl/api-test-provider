@@ -1,0 +1,288 @@
+# 由 tools/export_openapi_by_auth.py 生成，勿手改。
+# servers 固定为 http://127.0.0.1:18090；换端口时改用服务在线提供的 /openapi/basic.yaml
+openapi: "3.0.3"
+info:
+  title: 测试 API 提供服务 · 鉴权：HTTP Basic
+  version: "1.0.0"
+  description: |-
+    按鉴权类型合并的测试接口文档：用户名 + 密码，含附加鉴权参数（2 个场景 / 2 个端点）。
+
+    - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
+    - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
+    - x-test.role：DATA 业务接口 / TOKEN 登录与令牌接口（不要当数据接口调）/ FAULT 故障注入。
+    - 每次测试前 POST http://127.0.0.1:18090/__admin/reset?scenario=<场景> 复位，调用后查 http://127.0.0.1:18090/__admin/requests。
+servers:
+  - url: http://127.0.0.1:18090
+tags:
+  - name: basic
+    description: Basic 认证（A 鉴权）：BASIC_AUTH
+    x-auth:
+      type: basic
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: Basic dGVzdDp0ZXN0LXBhc3M=
+          prefix: Basic
+          note: 用户名 test，密码 test-pass
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/basic/openapi.json
+  - name: basic-extra
+    description: Basic 认证 + 附加 Query（A 鉴权）：BASIC_AUTH 与附加鉴权参数并存
+    x-auth:
+      type: basic
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: Basic dGVzdDp0ZXN0LXBhc3M=
+          prefix: Basic
+          note: 用户名 test，密码 test-pass
+      extraAuthParams:
+        - name: tenant
+          in: QUERY
+          value: t-001
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/basic-extra/openapi.json
+paths:
+  /s/basic/items:
+    get:
+      operationId: basic_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: BASIC-00001
+                      name: BASIC物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: BASIC-00002
+                      name: BASIC物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - basic
+      security:
+        - basic.basicAuth: []
+      x-scenario: basic
+      x-auth-type: basic
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/basic-extra/items:
+    get:
+      operationId: basicExtra_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: BASIC-EXTRA-00001
+                      name: BASIC-EXTRA物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: BASIC-EXTRA-00002
+                      name: BASIC-EXTRA物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - basic-extra
+      security:
+        - basic-extra.basicAuth: []
+          basic-extra.extraQueryTenant: []
+      x-scenario: basic-extra
+      x-auth-type: basic
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+      description: 错误响应体
+  securitySchemes:
+    basic.basicAuth:
+      type: http
+      scheme: basic
+      description: 测试账号 test / test-pass
+    basic-extra.basicAuth:
+      type: http
+      scheme: basic
+      description: 测试账号 test / test-pass
+    basic-extra.extraQueryTenant:
+      type: apiKey
+      in: query
+      name: tenant
+      description: 测试 API Key，固定值 t-001
+x-auth-type: basic

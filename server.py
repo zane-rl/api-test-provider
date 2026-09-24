@@ -31,7 +31,9 @@ from scenarios import REGISTRY, reset_all
 from scenarios import auth as auth_module
 from scenarios import faults as faults_module
 from scenarios.common import ApiError, Ctx, Resp, error_resp, json_resp, token_snapshot
+from scenarios.bundle import build_bundle, bundle_names
 from scenarios.openapi import build_openapi, build_swagger2
+from scenarios.yamlout import dump as yaml_dump
 
 MAX_LOG = 5000
 MAX_BODY_BYTES = 10 * 1024 * 1024      # 请求体上限，防止分块读取被撑爆
@@ -216,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
             body_raw, body_error = "", exc
 
         entry = None
-        if not path.startswith("/__admin") and path != "/health":
+        # admin、健康检查、按鉴权合并的文档都不属于任何场景，不记日志
+        if not path.startswith(("/__admin", "/openapi/")) and path != "/health":
             entry = {
                 "time": datetime.now().isoformat(timespec="milliseconds"),
                 "scenario": scenario_name,
@@ -268,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/__admin"):
             return self._admin(method, path, query_all, body_raw)
 
+        if path.startswith("/openapi/"):
+            return self._bundle(method, path)
+
         # 写方法一律 405（真实只读 API 的行为；打到这里说明配置有误）
         if method in ("PUT", "PATCH", "DELETE"):
             return error_resp(405, "只读测试服务，不接受 %s" % method,
@@ -307,6 +313,21 @@ class Handler(BaseHTTPRequestHandler):
             if denied is not None:
                 return denied
         return endpoint.handler(ctx)
+
+    # ---------- 按鉴权类型合并的文档 ----------
+
+    def _bundle(self, method, path):
+        """GET /openapi/<鉴权类型|all>.yaml / .json"""
+        if method != "GET":
+            return error_resp(405, "文档只支持 GET", {"Allow": "GET"})
+        name, _, ext = path[len("/openapi/"):].rpartition(".")
+        if ext not in ("yaml", "yml", "json") or name not in bundle_names():
+            return error_resp(404, "无此文档：%s（可用：%s，后缀 .yaml / .json）"
+                              % (path, " / ".join(bundle_names())))
+        doc = build_bundle(name, self.server.advertise_base)
+        if ext == "json":
+            return json_resp(doc)
+        return Resp(raw=yaml_dump(doc).encode("utf-8"), content_type="application/yaml; charset=utf-8")
 
     # ---------- admin ----------
 
@@ -371,7 +392,8 @@ class Handler(BaseHTTPRequestHandler):
                 "auth": scenario.auth.describe(scenario_base),
                 "endpoints": [e.catalog(scenario_base) for e in scenario.endpoints],
             })
-        return {"baseUrl": base, "count": len(items), "scenarios": items}
+        bundles = {name: "%s/openapi/%s.yaml" % (base, name) for name in bundle_names()}
+        return {"baseUrl": base, "count": len(items), "openapiBundles": bundles, "scenarios": items}
 
 
 def _parse_cookies(raw):
@@ -414,6 +436,7 @@ def main():
     print("  请求日志：%s/__admin/requests?scenario=<名字>&limit=50" % base)
     print("  健康检查：%s/health" % base)
     print("  某场景文档：%s/s/page-number/openapi.json" % base)
+    print("  按鉴权合并的文档：%s/openapi/<%s>.yaml" % (base, "|".join(bundle_names())))
     print("  Ctrl+C 退出")
     sys.stdout.flush()      # 输出重定向到文件时也能立刻看到启动横幅
     try:
