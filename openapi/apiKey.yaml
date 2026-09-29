@@ -5,7 +5,7 @@ info:
   title: 测试 API 提供服务 · 鉴权：API Key
   version: "1.0.0"
   description: |-
-    按鉴权类型合并的测试接口文档：Header / Query / Cookie 三种位置，含前缀与附加鉴权参数（5 个场景 / 5 个端点）。
+    按鉴权类型合并的测试接口文档：Header / Query / Cookie 三种位置，含前缀与附加鉴权参数（6 个场景 / 6 个端点）。
 
     - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
     - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
@@ -78,6 +78,18 @@ tags:
           value: extra-key-1
       tokenFlow: null
     x-openapi-url: http://127.0.0.1:18090/s/apikey-extra/openapi.json
+  - name: required-business-param
+    description: 验证接口带无来源的必填参数（C 请求与响应）：验证连接前检查请求值是否齐全：路径参数与 required Query 无固定值 / 无依赖 / 无测试值时返回 NEEDS_TEST_VALUES 且不发请求
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: HEADER
+          name: X-Api-Key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/required-business-param/openapi.json
 paths:
   /s/apikey-header/items:
     get:
@@ -620,6 +632,127 @@ paths:
         primaryKey: id
         expectedTotal: 20
         requiresAuth: true
+  "/s/required-business-param/customers/{customerId}":
+    get:
+      operationId: requiredBusinessParam_getCustomerProfile
+      summary: 查询客户档案（按客户 ID 与租户）
+      description: 路径参数 customerId 与必填 Query 参数 tenant 都没有默认值、也没有样例值，且不来自任何前置接口；缺 tenant 返回 400，customerId 不存在返回 404。可用 customerId：RBP-CUS-00001 ~ RBP-CUS-00005；tenant 任意非空值，原样回显在记录里
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            tenant:
+                              type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: RBP-CUS-00001
+                      name: RBP-CUS物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      tenant: tenant-001
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          description: 客户 ID
+          schema:
+            type: string
+        - name: tenant
+          in: query
+          required: true
+          description: 租户编码
+          schema:
+            type: string
+      x-original-operation-id: getCustomerProfile
+      tags:
+        - required-business-param
+      security:
+        - required-business-param.apiKeyHeader: []
+      x-scenario: required-business-param
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 1
+        requiresAuth: true
+        note: 验证接口必填参数无来源：缺值时后端应返回 NEEDS_TEST_VALUES 且不发请求；若误发请求（不带 tenant）会收到 400
+        pathSample:
+          customerId: RBP-CUS-00001
+        requiredTestValues:
+          - in: PATH
+            name: customerId
+            testValue: RBP-CUS-00001
+          - in: QUERY
+            name: tenant
+            testValue: tenant-001
 components:
   schemas:
     Error:
@@ -661,4 +794,9 @@ components:
       in: header
       name: X-App-Key
       description: 测试 API Key，固定值 extra-key-1
+    required-business-param.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: 测试 API Key，固定值 test-key-123
 x-auth-type: apiKey

@@ -4,7 +4,7 @@
 import unittest
 from urllib.parse import quote
 
-from .support import ProviderTestCase, request, fetch_all, records_of
+from .support import ProviderTestCase, request, fetch_all, records_of, build_auth
 
 
 class EchoTest(ProviderTestCase):
@@ -103,6 +103,65 @@ class ResponseShapeTest(ProviderTestCase):
         self.assertIsInstance(row["spec"], dict)
         self.assertRegex(row["updated_at"], r"^\d{4}-\d{2}-\d{2}T")
         self.assertTrue(any(r["remark"] is None for r in rows))
+
+
+class RequiredBusinessParamTest(ProviderTestCase):
+
+    SCENARIO = "required-business-param"
+    PATH = "/customers/{customerId}"
+
+    def _call(self, customer_id, query):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        auth = build_auth(self.catalog()[self.SCENARIO])
+        url = item["url"].replace("{customerId}", customer_id)
+        return request(url, headers=auth.headers, query=dict(auth.query, **query))
+
+    def test_all_values_present_returns_one_record_echoing_tenant(self):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        resp = self._call("RBP-CUS-00002", {"tenant": "t-abc"})
+        self.assertEqual(200, resp.status, resp.text[:200])
+        rows = records_of(resp.json, item["recordPath"])
+        self.assertEqual(1, len(rows))
+        self.assertEqual("RBP-CUS-00002", rows[0]["id"])
+        self.assertEqual("t-abc", rows[0]["tenant"])
+
+    def test_catalog_test_values_reproduce_expected_record(self):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        values = {v["name"]: v["testValue"] for v in item["requiredTestValues"]}
+        resp = self._call(values["customerId"], {"tenant": values["tenant"]})
+        self.assertEqual(200, resp.status)
+        self.assertEqual(item["sampleFirst3"], records_of(resp.json, item["recordPath"]))
+        self.assertEqual(1, item["expectedTotal"])
+
+    def test_missing_tenant_returns_400(self):
+        for query in ({}, {"tenant": ""}):
+            with self.subTest(query=query):
+                resp = self._call("RBP-CUS-00001", query)
+                self.assertEqual(400, resp.status)
+                self.assertIn("tenant", resp.json["message"])
+
+    def test_unknown_customer_returns_404(self):
+        resp = self._call("RBP-CUS-99999", {"tenant": "t-abc"})
+        self.assertEqual(404, resp.status)
+
+    def test_missing_api_key_returns_401(self):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        url = item["url"].replace("{customerId}", "RBP-CUS-00001")
+        self.assertEqual(401, request(url, query={"tenant": "t-abc"}).status)
+
+    def test_doc_params_are_required_without_sample_values(self):
+        """两个参数都必须是 required，且不带任何可能被当成固定值的样例 / 默认值"""
+        doc = request(self.catalog()[self.SCENARIO]["openapiUrl"]).json
+        self.assertEqual(1, sum(len(ops) for ops in doc["paths"].values()), "应只有一个接口")
+        params = {p["name"]: p for p in doc["paths"][self.PATH]["get"]["parameters"]}
+        self.assertEqual({"customerId": "path", "tenant": "query"},
+                         {k: v["in"] for k, v in params.items()})
+        sample_keys = {"example", "examples", "default", "x-example", "enum"}
+        for name, param in params.items():
+            with self.subTest(param=name):
+                self.assertTrue(param["required"])
+                self.assertFalse(sample_keys & set(param), param)
+                self.assertFalse(sample_keys & set(param["schema"]), param)
 
 
 class DependTest(ProviderTestCase):
