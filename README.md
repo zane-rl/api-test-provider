@@ -58,8 +58,12 @@ scenarios/
   depend.py                 D 依赖（2 个场景）
   faults.py                 E 故障（1 个场景）
   typemismatch.py           F 类型不一致（1 个场景，**唯一手写 schema 的地方**）
+  bundle.py                 按鉴权类型合并的 OpenAPI（由单场景文档改名合并而来）
+  yamlout.py                标准库实现的 YAML 输出器（YAML 1.1 解析器也不会误读）
   __init__.py               REGISTRY：场景注册表（有序），名字重复会直接报错
 tools/dump_scenario_table.py  导出下面那张场景总表
+tools/export_openapi_by_auth.py  生成 openapi/ 目录（按鉴权类型的合并 YAML + 汇总说明）
+openapi/                    生成物，勿手改：<鉴权类型>.yaml、all.yaml、README.md
 tests/                      标准库 unittest
 ```
 
@@ -79,6 +83,26 @@ tests/                      标准库 unittest
   对不上（见下），漂移用例对它豁免类型比对，但可达性照常校验。
 - 自测兜底：遍历每份文档声明的每个 path+method 真的发一次请求，断言非 404/405；
   分页用例只读 `/__admin/scenarios` 的分页元数据来翻页，清单写错用例就挂。
+
+## 按鉴权类型拆分的 OpenAPI（给其他项目解析）
+
+需要「一次拿到某类鉴权下全部接口」的消费方，用按鉴权类型合并的文档，而不是逐个场景拉：
+
+| 鉴权类型 | 场景数 | 静态文件 | 在线地址 |
+|---|---|---|---|
+| `none` 无鉴权 | 17 | `openapi/none.yaml` | `/openapi/none.yaml` |
+| `bearer` | 6 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
+| `apiKey` | 6 | `openapi/apiKey.yaml` | `/openapi/apiKey.yaml` |
+| `basic` | 2 | `openapi/basic.yaml` | `/openapi/basic.yaml` |
+| `oauth2` | 6 | `openapi/oauth2.yaml` | `/openapi/oauth2.yaml` |
+| `fixedParam` | 1 | `openapi/fixedParam.yaml` | `/openapi/fixedParam.yaml` |
+| 全部 | 38 | `openapi/all.yaml` | `/openapi/all.yaml` |
+
+- 在线地址另有 `.json` 版；`servers` 跟随实际端口。静态文件的 `servers` 固定为 `http://127.0.0.1:18090`。
+- 合并规则：路径加 `/s/<场景>` 前缀、securitySchemes 改名为 `<场景>.<原名>` 并下放到每个 operation、
+  operationId 加场景前缀；tag 的 `x-auth` 给测试凭证，operation 的 `x-test` 给角色 / 分页 / `expectedTotal`。
+- 汇总说明（按鉴权类型的场景明细、每个场景可直接执行的 curl、解析约定、测试流程）见 [`openapi/README.md`](openapi/README.md)。
+- 改了场景后跑 `python3 tools/export_openapi_by_auth.py` 重新生成；`tests/test_bundle.py` 会在静态文件过期时报错。
 
 ## 场景总表
 
@@ -154,6 +178,7 @@ tests/                      标准库 unittest
 |  |  | `GET /ok-string`<br>DATA |  | NONE | `data.items` | `id` | 3 |
 |  |  | `GET /biz-fail`<br>DATA |  | NONE | `data.items` | `id` | 0 |
 | **nested** | 对象字段展开 + 嵌套数组子表（子表复制父字段） | `GET /orders`<br>DATA | 无 | NONE | `data.items` | `order_no` | 12 |
+| **required-business-param** | 验证连接前检查请求值是否齐全：路径参数与 required Query 无固定值 / 无依赖 / 无测试值时返回 NEEDS_TEST_VALUES 且不发请求 | `GET /customers/{customerId}`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 1 |
 
 #### D 依赖
 
@@ -293,6 +318,7 @@ tests/                      标准库 unittest
 | `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位。场景名不存在返回 404 |
 | `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 6；0 表示不延迟，自测靠它跑快） |
 | `GET /__admin/state` | 当前配置、故障计数器、已签发令牌快照（排查用） |
+| `GET /openapi/<鉴权类型\|all>.yaml` / `.json` | 按鉴权类型合并的 OpenAPI 文档（见上文），同样不记日志；`/__admin/scenarios` 的 `openapiBundles` 列出全部地址 |
 
 鉴权描述的结构（`/__admin/scenarios` → `scenarios[].auth`）：
 
@@ -350,6 +376,8 @@ tests/                      标准库 unittest
    `tests/test_pagination.py` 里的数量断言。
 6. 重新生成场景总表：`python3 tools/dump_scenario_table.py`，把结果贴回本文件的
    `<!-- SCENARIO-TABLE -->` 区块。
+7. 重新生成按鉴权类型的文档：`python3 tools/export_openapi_by_auth.py`（新的鉴权类型会自动多出一份 YAML；
+   若是新的 `AuthSpec.kind`，顺手在 `scenarios/bundle.py` 的 `KIND_TITLES` 补中文名，并更新上文的文件表）。
 
 ## 已知局限
 
@@ -381,3 +409,5 @@ tests/                      标准库 unittest
 | 2026-09-20 | H5：`faults` 的 `GET /slow` 由返回空 `items` 改为返回 **5 条**确定性记录（id 前缀 `SLOW-`，结构与其它列表端点一致），延迟行为不变；其 200 schema 改为由真实响应推断（生成文档时靠 `doc_mode` 跳过 sleep），清单补 `recordPath` / `primaryKey` / `expectedTotal: 5`。 |
 | 2026-09-20 | H6：新增 `type-mismatch` 场景（8 个端点，5 正例 + 2 负例 + 1 对照组），**全项目唯一刻意让文档与实现不一致**的场景，供后端「验证接口时比对字段类型」使用；清单新增 `declaredVsActual`；`Endpoint` 新增通用的 `extra_catalog` 机制。37 个场景 / 73 个端点 / 127 条自测。 |
 | 2026-09-22 | H7：`type-mismatch` 新增 `/bool-as-string-consistent`（与 `/bool-as-string` 同一份文档声明、实际返回真布尔），用于复现下游 `String cannot be cast to Boolean`；`/bool-as-string` 的取值扩到 `"true"` / `"false"` / `"1"` / `"0"` 四种写法。37 个场景 / 74 个端点 / 129 条自测。 |
+| 2026-09-24 | H8：新增按鉴权类型合并的 OpenAPI 文档：`openapi/<鉴权类型>.yaml` 静态文件（`tools/export_openapi_by_auth.py` 生成）与在线 `/openapi/<鉴权类型>.yaml` / `.json`；附汇总说明 `openapi/README.md`；标准库 YAML 输出器；`/__admin/scenarios` 新增 `openapiBundles`。37 个场景 / 74 个端点 / 139 条自测。 |
+| 2026-09-30 | H-SC1：新增 `required-business-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /customers/{customerId}`），路径参数 `customerId` 与 required Query `tenant` 均无 example / default、也不来自前置接口，供后端「验证连接前缺值返回 NEEDS_TEST_VALUES 且不发请求」使用；缺 `tenant` 返回 400、未知客户 404；清单新增 `requiredTestValues`。38 个场景 / 75 个端点 / 145 条自测。 |
