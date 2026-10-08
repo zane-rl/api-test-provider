@@ -21,8 +21,9 @@
 ## 本地启动与获取文档
 
 ```bash
-./run.sh                        # 前台启动，监听 http://127.0.0.1:18090（Ctrl+C 退出，用完请停掉）
+./run.sh                        # 前台启动，监听 http://127.0.0.1:18090（Ctrl+C 退出）
 ./run.sh --port 9001 --quiet    # 换端口 / 不打印每条请求
+./stop.sh                       # 停掉 18090 上的实例；--port 9001 停指定端口
 
 curl -s http://127.0.0.1:18090/health                                # {"status":"ok"}
 curl -s http://127.0.0.1:18090/openapi/bearer.yaml                   # 某类鉴权的合并文档（YAML）
