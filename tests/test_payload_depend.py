@@ -164,6 +164,69 @@ class RequiredBusinessParamTest(ProviderTestCase):
                 self.assertFalse(sample_keys & set(param["schema"]), param)
 
 
+class DottedParamTest(ProviderTestCase):
+
+    SCENARIO = "dotted-param"
+    PATH = "/items"
+
+    def _call(self, query):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        auth = build_auth(self.catalog()[self.SCENARIO])
+        return request(item["url"], headers=auth.headers, query=dict(auth.query, **query))
+
+    def test_all_values_present_echo_dotted_params(self):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        resp = self._call({"filter.name": "名称 a+b", "page.size": "15"})
+        self.assertEqual(200, resp.status, resp.text[:200])
+        rows = records_of(resp.json, item["recordPath"])
+        self.assertEqual(3, len(rows))
+        for row in rows:
+            self.assertEqual("名称 a+b", row["filterName"])
+            self.assertEqual(15, row["pageSize"])
+
+    def test_optional_page_size_absent_echoes_null(self):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        values = {v["name"]: v["testValue"] for v in item["requiredTestValues"]}
+        self.assertEqual(["filter.name"], list(values))
+        resp = self._call(values)
+        self.assertEqual(200, resp.status)
+        rows = records_of(resp.json, item["recordPath"])
+        self.assertTrue(all(r["pageSize"] is None for r in rows))
+        self.assertEqual(item["sampleFirst3"], rows)
+        self.assertEqual(3, item["expectedTotal"])
+
+    def test_missing_filter_name_returns_400(self):
+        # 带的是「filter[name]」或嵌套写法时同样视为缺失
+        for query in ({}, {"filter.name": ""}, {"filter[name]": "x"}, {"name": "x"}):
+            with self.subTest(query=query):
+                resp = self._call(query)
+                self.assertEqual(400, resp.status)
+                self.assertIn("filter.name", resp.json["message"])
+
+    def test_non_integer_page_size_returns_400(self):
+        resp = self._call({"filter.name": "x", "page.size": "abc"})
+        self.assertEqual(400, resp.status)
+        self.assertIn("page.size", resp.json["message"])
+
+    def test_missing_api_key_returns_401(self):
+        item = self.endpoint(self.SCENARIO, self.PATH)
+        self.assertEqual(401, request(item["url"], query={"filter.name": "x"}).status)
+
+    def test_doc_params_keep_dotted_names_without_sample_values(self):
+        doc = request(self.catalog()[self.SCENARIO]["openapiUrl"]).json
+        self.assertEqual(1, sum(len(ops) for ops in doc["paths"].values()), "应只有一个接口")
+        params = {p["name"]: p for p in doc["paths"][self.PATH]["get"]["parameters"]}
+        self.assertEqual({"filter.name": True, "page.size": False},
+                         {k: v["required"] for k, v in params.items()})
+        self.assertEqual("integer", params["page.size"]["schema"]["type"])
+        sample_keys = {"example", "examples", "default", "x-example", "enum"}
+        for name, param in params.items():
+            with self.subTest(param=name):
+                self.assertEqual("query", param["in"])
+                self.assertFalse(sample_keys & set(param), param)
+                self.assertFalse(sample_keys & set(param["schema"]), param)
+
+
 class DependTest(ProviderTestCase):
 
     def test_path_dependency_sums_over_all_parents(self):

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""C 类：请求与响应场景（除 required-business-param 用固定 API Key 外，均无鉴权）。
+"""C 类：请求与响应场景（除 required-business-param / dotted-param 用固定 API Key 外，均无鉴权）。
 
 覆盖：Query / 请求体原样回显（验证 `+`、中文、空格的编码）、记录路径命中单对象、
 业务成功码的多种写法、一个接口产出多个对象（嵌套数组子表）、
-验证接口带「无来源的必填参数」（路径参数 + required Query）。
+验证接口带「无来源的必填参数」（路径参数 + required Query）、参数名带点号。
 """
 
 from datetime import timedelta
@@ -235,6 +235,49 @@ def _scenario_required_business_param():
                                         requirements=[api_key_req("header", "X-Api-Key", API_KEY)]))
 
 
+# ==================== dotted-param：参数名带点号 ====================
+
+DOTTED_ROWS = build_dataset("DOT", 3)
+DOTTED_SAMPLE_FILTER = "dotted-name-001"
+
+
+def _dotted_records(filter_name, page_size):
+    """每条记录回显收到的 filter.name / page.size，E2E 据此断言点号参数名被原样送达"""
+    return [dict(row, filterName=filter_name, pageSize=page_size) for row in DOTTED_ROWS]
+
+
+def _scenario_dotted_param():
+    def handler(ctx):
+        filter_name = ctx.query.get("filter.name")
+        if not filter_name:
+            raise ApiError(400, "缺少必填参数 filter.name（Query）")
+        page_size = ctx.int_query("page.size", minimum=1)
+        return json_resp({"code": 0, "message": "ok",
+                          "data": {"items": _dotted_records(filter_name, page_size)}})
+
+    ep = Endpoint(
+        "GET", "/items", handler,
+        operation_id="listDottedParamItems", summary="查询数据（参数名带点号）",
+        description="Query 参数名本身带点号：必填 filter.name、可选整数 page.size，都没有默认值与样例值。"
+                    "缺少或为空的 filter.name 返回 400；page.size 不是正整数返回 400。"
+                    "每条记录把收到的 filter.name 回显在 filterName、page.size 回显在 pageSize（未传为 null）",
+        # 两个参数都刻意不给 example / default，避免被后端当成固定值
+        parameters=[qp("filter.name", "string", required=True, description="按名称过滤"),
+                    qp("page.size", "integer", description="每页数量（只回显，不影响返回条数）")],
+        record_path="data.items", primary_key="id",
+        dataset=lambda: _dotted_records(DOTTED_SAMPLE_FILTER, None),
+        doc_sample={"query": {"filter.name": DOTTED_SAMPLE_FILTER, "page.size": "20"}},
+        note="参数名带点号：后端不应把 filter.name 拆成嵌套结构；缺 filter.name 会收到 400",
+        extra_catalog={"requiredTestValues": [
+            {"in": "QUERY", "name": "filter.name", "testValue": DOTTED_SAMPLE_FILTER},
+        ]},
+    )
+    return Scenario("dotted-param", "参数名带点号",
+                    "Query 参数名含点号（filter.name / page.size）时按原名透传，不拆成嵌套对象",
+                    [ep], auth=AuthSpec(kind="apiKey",
+                                        requirements=[api_key_req("header", "X-Api-Key", API_KEY)]))
+
+
 def build_scenarios():
     return [
         _scenario_echo(),
@@ -242,4 +285,5 @@ def build_scenarios():
         _scenario_biz_code(),
         _scenario_nested(),
         _scenario_required_business_param(),
+        _scenario_dotted_param(),
     ]

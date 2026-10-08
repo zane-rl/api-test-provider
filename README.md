@@ -92,11 +92,11 @@ tests/                      标准库 unittest
 |---|---|---|---|
 | `none` 无鉴权 | 17 | `openapi/none.yaml` | `/openapi/none.yaml` |
 | `bearer` | 6 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
-| `apiKey` | 6 | `openapi/apiKey.yaml` | `/openapi/apiKey.yaml` |
+| `apiKey` | 7 | `openapi/apiKey.yaml` | `/openapi/apiKey.yaml` |
 | `basic` | 2 | `openapi/basic.yaml` | `/openapi/basic.yaml` |
 | `oauth2` | 6 | `openapi/oauth2.yaml` | `/openapi/oauth2.yaml` |
 | `fixedParam` | 1 | `openapi/fixedParam.yaml` | `/openapi/fixedParam.yaml` |
-| 全部 | 38 | `openapi/all.yaml` | `/openapi/all.yaml` |
+| 全部 | 39 | `openapi/all.yaml` | `/openapi/all.yaml` |
 
 - 在线地址另有 `.json` 版；`servers` 跟随实际端口。静态文件的 `servers` 固定为 `http://127.0.0.1:18090`。
 - 合并规则：路径加 `/s/<场景>` 前缀、securitySchemes 改名为 `<场景>.<原名>` 并下放到每个 operation、
@@ -179,6 +179,7 @@ tests/                      标准库 unittest
 |  |  | `GET /biz-fail`<br>DATA |  | NONE | `data.items` | `id` | 0 |
 | **nested** | 对象字段展开 + 嵌套数组子表（子表复制父字段） | `GET /orders`<br>DATA | 无 | NONE | `data.items` | `order_no` | 12 |
 | **required-business-param** | 验证连接前检查请求值是否齐全：路径参数与 required Query 无固定值 / 无依赖 / 无测试值时返回 NEEDS_TEST_VALUES 且不发请求 | `GET /customers/{customerId}`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 1 |
+| **dotted-param** | Query 参数名含点号（filter.name / page.size）时按原名透传，不拆成嵌套对象 | `GET /items`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 3 |
 
 #### D 依赖
 
@@ -411,3 +412,4 @@ tests/                      标准库 unittest
 | 2026-09-22 | H7：`type-mismatch` 新增 `/bool-as-string-consistent`（与 `/bool-as-string` 同一份文档声明、实际返回真布尔），用于复现下游 `String cannot be cast to Boolean`；`/bool-as-string` 的取值扩到 `"true"` / `"false"` / `"1"` / `"0"` 四种写法。37 个场景 / 74 个端点 / 129 条自测。 |
 | 2026-09-24 | H8：新增按鉴权类型合并的 OpenAPI 文档：`openapi/<鉴权类型>.yaml` 静态文件（`tools/export_openapi_by_auth.py` 生成）与在线 `/openapi/<鉴权类型>.yaml` / `.json`；附汇总说明 `openapi/README.md`；标准库 YAML 输出器；`/__admin/scenarios` 新增 `openapiBundles`。37 个场景 / 74 个端点 / 139 条自测。 |
 | 2026-09-30 | H-SC1：新增 `required-business-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /customers/{customerId}`），路径参数 `customerId` 与 required Query `tenant` 均无 example / default、也不来自前置接口，供后端「验证连接前缺值返回 NEEDS_TEST_VALUES 且不发请求」使用；缺 `tenant` 返回 400、未知客户 404；清单新增 `requiredTestValues`。38 个场景 / 75 个端点 / 145 条自测。 |
+| 2026-10-08 | H-SC2：新增 `dotted-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /items`），Query 参数名本身带点号：必填 `filter.name`、可选整数 `page.size`，均无 example / default；记录回显 `filterName` / `pageSize`，缺或空 `filter.name` 返回 400；清单给 `requiredTestValues`。39 个场景 / 76 个端点 / 151 条自测。 |

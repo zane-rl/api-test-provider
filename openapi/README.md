@@ -2,7 +2,7 @@
 
 > 由 `tools/export_openapi_by_auth.py` 生成，**勿手改**；改了场景后重跑该脚本。
 
-本目录把测试 API 提供服务的 38 个场景 / 75 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 YAML，供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`）。
+本目录把测试 API 提供服务的 39 个场景 / 76 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 YAML，供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`）。
 
 ## 文件一览
 
@@ -10,11 +10,11 @@
 |---|---|---|---|---|---|
 | `none` 无鉴权 | 不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里 | [`none.yaml`](none.yaml) | `http://127.0.0.1:18090/openapi/none.yaml` | 17 | 34 / 0 / 10 |
 | `bearer` Bearer Token | 固定令牌，或先调登录接口取令牌再注入 Header / Query | [`bearer.yaml`](bearer.yaml) | `http://127.0.0.1:18090/openapi/bearer.yaml` | 6 | 7 / 3 / 0 |
-| `apiKey` API Key | Header / Query / Cookie 三种位置，含前缀与附加鉴权参数 | [`apiKey.yaml`](apiKey.yaml) | `http://127.0.0.1:18090/openapi/apiKey.yaml` | 6 | 6 / 0 / 0 |
+| `apiKey` API Key | Header / Query / Cookie 三种位置，含前缀与附加鉴权参数 | [`apiKey.yaml`](apiKey.yaml) | `http://127.0.0.1:18090/openapi/apiKey.yaml` | 7 | 7 / 0 / 0 |
 | `basic` HTTP Basic | 用户名 + 密码，含附加鉴权参数 | [`basic.yaml`](basic.yaml) | `http://127.0.0.1:18090/openapi/basic.yaml` | 2 | 2 / 0 / 0 |
 | `oauth2` OAuth2 客户端凭证 | client_credentials；client_secret_post / basic、令牌按次数或按时间失效 | [`oauth2.yaml`](oauth2.yaml) | `http://127.0.0.1:18090/openapi/oauth2.yaml` | 6 | 6 / 6 / 0 |
 | `fixedParam` 固定参数 | Header + Query + Cookie 三处同时带固定值 | [`fixedParam.yaml`](fixedParam.yaml) | `http://127.0.0.1:18090/openapi/fixedParam.yaml` | 1 | 1 / 0 / 0 |
-| `all` 全部场景 | 全部鉴权类型 | [`all.yaml`](all.yaml) | `http://127.0.0.1:18090/openapi/all.yaml` | 38 | 56 / 9 / 10 |
+| `all` 全部场景 | 全部鉴权类型 | [`all.yaml`](all.yaml) | `http://127.0.0.1:18090/openapi/all.yaml` | 39 | 57 / 9 / 10 |
 
 ## 本地启动与获取文档
 
@@ -160,6 +160,7 @@ Header / Query / Cookie 三种位置，含前缀与附加鉴权参数。
 | **apikey-header-prefix** | API_KEY 放 Authorization 头且带自定义前缀 Token | `GET /s/apikey-header-prefix/items`<br>DATA | HEADER `Authorization` = `Token test-key-123` | NONE | `data.items` | `id` | 20 |
 | **apikey-extra** | API_KEY 主凭证与附加鉴权参数并存 | `GET /s/apikey-extra/items`<br>DATA | HEADER `X-API-Key` = `test-key-123`<br>附加 HEADER `X-App-Key` = `extra-key-1` | NONE | `data.items` | `id` | 20 |
 | **required-business-param** | 验证连接前检查请求值是否齐全：路径参数与 required Query 无固定值 / 无依赖 / 无测试值时返回 NEEDS_TEST_VALUES 且不发请求 | `GET /s/required-business-param/customers/{customerId}`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 1 |
+| **dotted-param** | Query 参数名含点号（filter.name / page.size）时按原名透传，不拆成嵌套对象 | `GET /s/dotted-param/items`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 3 |
 
 快速验证（`B=http://127.0.0.1:18090`）：
 
@@ -177,6 +178,8 @@ curl -s "$B/s/apikey-header-prefix/items" -H "Authorization: Token test-key-123"
 curl -s "$B/s/apikey-extra/items" -H "X-API-Key: test-key-123" -H "X-App-Key: extra-key-1"
 # required-business-param
 curl -s "$B/s/required-business-param/customers/{customerId}" -H "X-Api-Key: test-key-123"
+# dotted-param
+curl -s "$B/s/dotted-param/items" -H "X-Api-Key: test-key-123"
 ```
 
 ### `basic` HTTP Basic — [`basic.yaml`](basic.yaml)
