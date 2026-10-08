@@ -8,7 +8,12 @@ import json
 import unittest
 from urllib.parse import urlencode
 
-from .support import ProviderTestCase, request, build_auth
+from .support import ProviderTestCase, request, build_auth, operations_of
+
+try:
+    import yaml      # 只在自测里用来回读；服务本身不依赖第三方库
+except ImportError:  # pragma: no cover
+    yaml = None
 
 
 class OpenApiTest(ProviderTestCase):
@@ -56,13 +61,14 @@ class OpenApiTest(ProviderTestCase):
             token_paths = [i["path"] for i in entry["endpoints"] if i["role"] == "TOKEN"]
             for path in token_paths:
                 with self.subTest(scenario=entry["name"], path=path):
-                    for operation in doc["paths"][path].values():
+                    for operation in operations_of(doc["paths"][path]).values():
                         self.assertEqual([], operation["security"])
 
     def test_doc_paths_match_catalog_endpoints(self):
         for entry, doc in self.docs():
             with self.subTest(scenario=entry["name"]):
-                declared = {(m.upper(), p) for p, ops in doc["paths"].items() for m in ops}
+                declared = {(m.upper(), p) for p, ops in doc["paths"].items()
+                            for m in operations_of(ops)}
                 catalog = {(i["method"], i["path"]) for i in entry["endpoints"]}
                 self.assertEqual(catalog, declared)
 
@@ -75,7 +81,7 @@ class OpenApiTest(ProviderTestCase):
             auth = build_auth(entry) if entry["auth"]["credentials"] else None
             by_key = {(i["method"], i["path"]): i for i in entry["endpoints"]}
             for path, operations in doc["paths"].items():
-                for method, operation in operations.items():
+                for method, operation in operations_of(operations).items():
                     item = by_key[(method.upper(), path)]
                     checked += 1
                     with self.subTest(scenario=entry["name"], op=operation["operationId"]):
@@ -84,7 +90,7 @@ class OpenApiTest(ProviderTestCase):
                                          "文档声明的 %s %s 打不通：%s"
                                          % (method.upper(), path, resp.text[:200]))
                         self._assert_no_schema_drift(entry, operation, resp)
-        self.assertEqual(76, checked, "端点总数变了，请同步 README")
+        self.assertEqual(87, checked, "端点总数变了，请同步 README")
 
     def _call_declared(self, entry, item, operation, auth):
         url = item["url"]
@@ -92,8 +98,8 @@ class OpenApiTest(ProviderTestCase):
             url = url.replace("{%s}" % name, value)
         query, headers, cookies, body, raw = {}, {}, {}, None, None
         for param in operation.get("parameters", []):
-            # 慢响应端点按 0 秒调用，避免自测被拖住
-            if param["name"] == "seconds":
+            # 慢响应端点按 0 秒调用，避免自测被拖住（$ref 引用的公共参数没有 name）
+            if param.get("name") == "seconds":
                 query["seconds"] = "0"
         request_body = operation.get("requestBody")
         if request_body:
@@ -140,63 +146,113 @@ class OpenApiTest(ProviderTestCase):
                         % (operation["operationId"], actual - declared))
 
 
-class Swagger2Test(ProviderTestCase):
+class DocFormatTest(ProviderTestCase):
+    """每个场景的文档都有 .json / .yaml / .yml 三种扩展名，内容等价，且都是 OpenAPI 3.0.x"""
 
-    EXPECTED = {"apikey-header", "page-number"}
-
-    def test_only_declared_scenarios_expose_swagger2(self):
-        names = {name for name, entry in self.catalog().items() if entry["swagger2Url"]}
-        self.assertEqual(self.EXPECTED, names)
+    def test_every_scenario_serves_three_equivalent_formats(self):
         for name, entry in self.catalog().items():
-            if name in self.EXPECTED:
-                continue
-            resp = request(entry["baseUrl"] + "/swagger2.json")
-            self.assertEqual(404, resp.status)
-
-    def test_swagger2_uses_v2_syntax(self):
-        for name in self.EXPECTED:
-            entry = self.scenario(name)
-            resp = request(entry["swagger2Url"])
-            self.assertEqual(200, resp.status)
-            doc = resp.json
             with self.subTest(scenario=name):
-                self.assertEqual("2.0", doc["swagger"])
-                self.assertNotIn("openapi", doc)
-                self.assertNotIn("components", doc)
-                self.assertEqual("/s/%s" % name, doc["basePath"])
-                self.assertEqual(["http"], doc["schemes"])
-                self.assertIn(":", doc["host"])
-                self.assertTrue(doc["definitions"])
-                for path, operations in doc["paths"].items():
-                    for operation in operations.values():
-                        ref = operation["responses"]["200"]["schema"]["$ref"]
-                        key = ref.split("/")[-1]
-                        self.assertIn(key, doc["definitions"])
-                        self.assertNotIn("nullable", json.dumps(doc["definitions"][key]))
+                urls = entry["openapiUrls"]
+                self.assertEqual({"json", "yaml", "yml"}, set(urls))
+                self.assertEqual(entry["openapiUrl"], urls["json"])
+                as_json = request(urls["json"])
+                as_yaml = request(urls["yaml"])
+                as_yml = request(urls["yml"])
+                for resp in (as_json, as_yaml, as_yml):
+                    self.assertEqual(200, resp.status)
+                self.assertTrue(as_json.headers["Content-Type"].startswith("application/json"))
+                self.assertTrue(as_yaml.headers["Content-Type"].startswith("application/yaml"))
+                self.assertEqual(as_yaml.text, as_yml.text)
+                self.assertTrue(as_yaml.text.startswith('openapi: "3.0.3"\n'), as_yaml.text[:40])
+                self.assertTrue(as_json.json["openapi"].startswith("3.0."))
+                if yaml is not None:
+                    self.assertEqual(as_json.json, yaml.safe_load(as_yaml.text))
 
-    def test_swagger2_security_definitions(self):
-        doc = request(self.scenario("apikey-header")["swagger2Url"]).json
-        self.assertEqual({"apiKeyHeader"}, set(doc["securityDefinitions"]))
-        self.assertEqual({"type": "apiKey", "name": "X-Api-Key", "in": "header",
-                          "description": doc["securityDefinitions"]["apiKeyHeader"]["description"]},
-                         doc["securityDefinitions"]["apiKeyHeader"])
-        self.assertEqual([{"apiKeyHeader": []}], doc["security"])
+    def test_bundles_serve_three_formats(self):
+        payload = request(self.base + "/__admin/scenarios").json
+        self.assertEqual(set(payload["openapiBundles"]), set(payload["openapiBundleUrls"]))
+        for name, urls in payload["openapiBundleUrls"].items():
+            with self.subTest(bundle=name):
+                self.assertEqual(payload["openapiBundles"][name], urls["yaml"])
+                texts = {ext: request(url) for ext, url in urls.items()}
+                self.assertEqual({200}, {r.status for r in texts.values()})
+                self.assertEqual(texts["yaml"].text, texts["yml"].text)
+                self.assertEqual("3.0.3", texts["json"].json["openapi"])
 
-    def test_swagger2_paths_are_reachable(self):
-        for name in self.EXPECTED:
-            entry = self.scenario(name)
-            doc = request(entry["swagger2Url"]).json
-            auth = build_auth(entry) if entry["auth"]["credentials"] else None
-            for path, operations in doc["paths"].items():
-                for method in operations:
-                    with self.subTest(scenario=name, path=path, method=method):
-                        headers, query, cookies = {}, {}, {}
-                        if auth:
-                            auth.merge_into(headers, query, cookies)
-                        url = "http://%s%s%s" % (doc["host"], doc["basePath"], path)
-                        resp = request(url, method=method.upper(), headers=headers,
-                                       query=query, cookies=cookies)
-                        self.assertNotIn(resp.status, (404, 405))
+    def test_swagger2_is_no_longer_served_for_normal_scenarios(self):
+        payload = request(self.base + "/__admin/scenarios").json
+        for entry in payload["scenarios"]:
+            with self.subTest(scenario=entry["name"]):
+                self.assertNotIn("swagger2Url", entry)
+                self.assertEqual(404, request(entry["baseUrl"] + "/swagger2.json").status)
+                self.assertEqual(404, request(entry["baseUrl"] + "/openapi.xml").status)
+
+
+class NegativeDocumentTest(ProviderTestCase):
+    """应被后端拒绝的文档版本：Swagger 2.0 与 OpenAPI 3.1.0，不计入正常场景"""
+
+    def _negatives(self):
+        payload = request(self.base + "/__admin/scenarios").json
+        return payload, {item["name"]: item for item in payload["negativeDocuments"]}
+
+    def test_listed_separately_and_marked_rejected(self):
+        payload, negatives = self._negatives()
+        self.assertEqual({"swagger2", "openapi31"}, set(negatives))
+        self.assertEqual(len(payload["scenarios"]), payload["count"])
+        self.assertFalse([s for s in payload["scenarios"] if s["name"].startswith("__")])
+        for item in negatives.values():
+            self.assertEqual("REJECTED", item["expectedBackendSupport"])
+            self.assertIn(item["url"], item["urls"].values())
+        self.assertTrue(negatives["swagger2"]["url"].endswith("/__negative/swagger2.json"))
+        self.assertTrue(negatives["openapi31"]["url"].endswith("/__negative/openapi31.yaml"))
+
+    def test_swagger2_document(self):
+        item = self._negatives()[1]["swagger2"]
+        doc = request(item["urls"]["json"]).json
+        self.assertEqual("2.0", doc["swagger"])
+        self.assertNotIn("openapi", doc)
+        self.assertNotIn("components", doc)
+        self.assertEqual("/__negative", doc["basePath"])
+        self.assertEqual(["http"], doc["schemes"])
+        self.assertEqual({"/items"}, set(doc["paths"]))
+        self.assertEqual({"get"}, set(doc["paths"]["/items"]))
+        ref = doc["paths"]["/items"]["get"]["responses"]["200"]["schema"]["$ref"]
+        self.assertIn(ref.split("/")[-1], doc["definitions"])
+        text = request(item["urls"]["yaml"]).text
+        self.assertEqual(text, request(item["urls"]["yml"]).text)
+        self.assertTrue(text.startswith('swagger: "2.0"\n'), text[:40])
+        if yaml is not None:
+            self.assertEqual(doc, yaml.safe_load(text))
+
+    def test_openapi31_document(self):
+        item = self._negatives()[1]["openapi31"]
+        text = request(item["urls"]["yaml"]).text
+        self.assertTrue(text.startswith('openapi: "3.1.0"\n'), text[:40])
+        self.assertEqual(text, request(item["urls"]["yml"]).text)
+        doc = request(item["urls"]["json"]).json
+        self.assertEqual("3.1.0", doc["openapi"])
+        self.assertEqual([{"url": self.base + "/__negative"}], doc["servers"])
+        self.assertEqual({"/items"}, set(doc["paths"]))
+        self.assertNotIn("nullable", json.dumps(doc))
+        if yaml is not None:
+            self.assertEqual(doc, yaml.safe_load(text))
+
+    def test_described_endpoint_is_reachable_and_logged(self):
+        item = self._negatives()[1]["swagger2"]["endpoint"]
+        resp = request(item["url"])
+        self.assertEqual(200, resp.status)
+        rows = resp.json["data"]["items"]
+        self.assertEqual(item["expectedTotal"], len(rows))
+        self.assertEqual(3, len({r[item["primaryKey"]] for r in rows}))
+        self.assertEqual(405, request(item["url"], method="POST", body="").status)
+        self.assertEqual(404, request(self.base + "/__negative/nope.json").status)
+        # 后端若没有拒绝文档而真的发了请求，这里查得到
+        logged = self.requests_of("__negative")
+        self.assertEqual(["/__negative/items"] * 2 + ["/__negative/nope.json"],
+                         [r["path"] for r in logged])
+        resp = request(self.base + "/__admin/reset?scenario=__negative", method="POST")
+        self.assertEqual(200, resp.status)
+        self.assertEqual([], self.requests_of("__negative"))
 
 
 if __name__ == "__main__":

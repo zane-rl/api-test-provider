@@ -67,6 +67,15 @@ def request(url, method="GET", headers=None, body=None, json_body=None,
         return Response(code, headers, text)
 
 
+# 路径项（path item）里只有这些键是操作，其余（如 parameters）不是
+HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+
+
+def operations_of(path_item):
+    """路径项里的 {方法: 操作}，跳过路径项级的 parameters 等非操作键"""
+    return {m: op for m, op in path_item.items() if m in HTTP_METHODS}
+
+
 # ==================== 取值 ====================
 
 def extract(payload, path):
@@ -94,7 +103,11 @@ def obtain_token(base_url, flow):
     """按清单里的 tokenFlow 取一个访问令牌"""
     kind = flow["kind"]
     if kind == "REQUEST_TOKEN":
-        resp = request(flow["url"], method=flow["method"], json_body=flow["requestBody"])
+        if flow.get("contentType") == "application/x-www-form-urlencoded":
+            resp = request(flow["url"], method=flow["method"], body=urlencode(flow["requestBody"]),
+                           headers={"Content-Type": flow["contentType"]})
+        else:
+            resp = request(flow["url"], method=flow["method"], json_body=flow["requestBody"])
         assert resp.status == 200, "取令牌失败：%s %s" % (resp.status, resp.text)
         return extract(resp.json, flow["tokenPath"])
     if kind == "OAUTH2_CLIENT_CREDENTIALS":

@@ -51,19 +51,20 @@ python3 -m unittest tests.test_auth   # 只跑一个文件
 server.py                   HTTP 处理、路由、请求日志、/health、/__admin/*、启动参数
 scenarios/
   common.py                 Ctx/Resp/ApiError、鉴权模型、Endpoint/Scenario、造数、令牌仓库、schema 推断
-  openapi.py                由注册表动态生成 OpenAPI 3.0 文档 + Swagger 2.0 转换器
-  auth.py                   A 鉴权（21 个场景）
-  pagination.py             B 分页（8 个场景）
-  payload.py                C 请求与响应（4 个场景）
+  openapi.py                由注册表动态生成 OpenAPI 3.0 文档（Swagger 2.0 转换器只给反例文档用）
+  auth.py                   A 鉴权（23 个场景）
+  pagination.py             B 分页（9 个场景）
+  payload.py                C 请求与响应（9 个场景）
   depend.py                 D 依赖（2 个场景）
   faults.py                 E 故障（1 个场景）
   typemismatch.py           F 类型不一致（1 个场景，**唯一手写 schema 的地方**）
+  negative.py               反例文档：Swagger 2.0 / OpenAPI 3.1.0（应被后端拒绝，不计入场景数）
   bundle.py                 按鉴权类型合并的 OpenAPI（由单场景文档改名合并而来）
   yamlout.py                标准库实现的 YAML 输出器（YAML 1.1 解析器也不会误读）
   __init__.py               REGISTRY：场景注册表（有序），名字重复会直接报错
 tools/dump_scenario_table.py  导出下面那张场景总表
-tools/export_openapi_by_auth.py  生成 openapi/ 目录（按鉴权类型的合并 YAML + 汇总说明）
-openapi/                    生成物，勿手改：<鉴权类型>.yaml、all.yaml、README.md
+tools/export_openapi_by_auth.py  生成 openapi/ 目录（按鉴权类型的合并文档 .yaml / .yml / .json + 汇总说明）
+openapi/                    生成物，勿手改：<鉴权类型>.{yaml,yml,json}、all.{yaml,yml,json}、README.md
 tests/                      标准库 unittest
 ```
 
@@ -90,24 +91,27 @@ tests/                      标准库 unittest
 
 | 鉴权类型 | 场景数 | 静态文件 | 在线地址 |
 |---|---|---|---|
-| `none` 无鉴权 | 17 | `openapi/none.yaml` | `/openapi/none.yaml` |
-| `bearer` | 6 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
+| `none` 无鉴权 | 21 | `openapi/none.yaml` | `/openapi/none.yaml` |
+| `bearer` | 8 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
 | `apiKey` | 7 | `openapi/apiKey.yaml` | `/openapi/apiKey.yaml` |
 | `basic` | 2 | `openapi/basic.yaml` | `/openapi/basic.yaml` |
 | `oauth2` | 6 | `openapi/oauth2.yaml` | `/openapi/oauth2.yaml` |
 | `fixedParam` | 1 | `openapi/fixedParam.yaml` | `/openapi/fixedParam.yaml` |
-| 全部 | 39 | `openapi/all.yaml` | `/openapi/all.yaml` |
+| 全部 | 45 | `openapi/all.yaml` | `/openapi/all.yaml` |
 
-- 在线地址另有 `.json` 版；`servers` 跟随实际端口。静态文件的 `servers` 固定为 `http://127.0.0.1:18090`。
+- 每份文档都有 `.yaml` / `.yml` / `.json` 三种扩展名（静态文件与在线地址都是，表里只列了 `.yaml`），内容等价；
+  在线文档的 `servers` 跟随实际端口，静态文件的 `servers` 固定为 `http://127.0.0.1:18090`。
 - 合并规则：路径加 `/s/<场景>` 前缀、securitySchemes 改名为 `<场景>.<原名>` 并下放到每个 operation、
+  公共参数（components.parameters）改名为 `<场景>.<原名>` 且引用处保留 `$ref`、
   operationId 加场景前缀；tag 的 `x-auth` 给测试凭证，operation 的 `x-test` 给角色 / 分页 / `expectedTotal`。
 - 汇总说明（按鉴权类型的场景明细、每个场景可直接执行的 curl、解析约定、测试流程）见 [`openapi/README.md`](openapi/README.md)。
 - 改了场景后跑 `python3 tools/export_openapi_by_auth.py` 重新生成；`tests/test_bundle.py` 会在静态文件过期时报错。
 
 ## 场景总表
 
-所有业务路径形如 `/s/<场景>/<端点>`；每个场景的文档在 `/s/<场景>/openapi.json`（**该端点本身不需要鉴权**）。
-`apikey-header` 与 `page-number` 额外提供 `/s/<场景>/swagger2.json`（Swagger 2.0 写法，守后端的 v2 转换路径）。
+所有业务路径形如 `/s/<场景>/<端点>`；每个场景的文档在 `/s/<场景>/openapi.json`，另有内容等价的
+`/s/<场景>/openapi.yaml` 与 `/s/<场景>/openapi.yml`（**文档端点本身不需要鉴权**）。全部文档都是 OpenAPI 3.0.3，
+见下文「文档格式与版本」。
 
 `role` 列：`DATA` = 业务数据接口（测试应勾选并同步）、`TOKEN` = 登录 / 令牌端点（不要勾选）、`FAULT` = 故障注入。
 
@@ -125,7 +129,7 @@ tests/                      标准库 unittest
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 | **bearer-request-query** | tokenSource=REQUEST，令牌注入 Query | `POST /login`<br>TOKEN | QUERY `access_token` = `<由令牌接口签发>`<br>令牌：`POST /login`，体 `{"username": "test", "password": "test-pass"}`，取 `data.accessToken` | NONE | — | 无 | — |
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
-| **apikey-header** | API_KEY in=header；另提供 Swagger 2.0 文档 | `GET /items`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 20 |
+| **apikey-header** | API_KEY in=header | `GET /items`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 20 |
 | **apikey-query** | API_KEY in=query | `GET /items`<br>DATA | QUERY `api_key` = `test-key-123` | NONE | `data.items` | `id` | 20 |
 | **apikey-cookie** | API_KEY in=cookie | `GET /items`<br>DATA | COOKIE `api_key` = `test-key-123` | NONE | `data.items` | `id` | 20 |
 | **apikey-header-prefix** | API_KEY 放 Authorization 头且带自定义前缀 Token | `GET /items`<br>DATA | HEADER `Authorization` = `Token test-key-123` | NONE | `data.items` | `id` | 20 |
@@ -148,12 +152,16 @@ tests/                      标准库 unittest
 | **bearer-extra** | BEARER_TOKEN 与附加鉴权参数（Header + Query）并存 | `GET /items`<br>DATA | HEADER `Authorization` = `Bearer test-token-abc`<br>附加 HEADER `X-App-Key` = `extra-key-1`<br>附加 QUERY `sign` = `test-sign` | NONE | `data.items` | `id` | 20 |
 | **forbidden** | 401 与 403 分类 | `GET /secret-items`<br>DATA | HEADER `Authorization` = `Bearer test-token-abc` | NONE | `data.items` | `id` | 0 |
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **token-json-body** | 取 Token 接口只收 application/json；Token 路径 data.token.value 且带有效期字段 | `POST /auth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /auth/token`，体 `{"appKey": "test-client", "appSecret": "test-secret"}`，取 `data.token.value` | NONE | — | 无 | — |
+|  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **token-form-body** | 取 Token 接口只收 application/x-www-form-urlencoded；Token 在顶层 tokenValue | `POST /auth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /auth/token`，表单 `appKey=test-client&appSecret=test-secret`，取 `tokenValue` | NONE | — | 无 | — |
+|  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 
 #### B 分页
 
 | 场景 | 覆盖的后端能力 | 端点 | 鉴权与测试凭证 | 分页方式 | 记录路径 | 主键 | 期望总数 |
 |---|---|---|---|---|---|---|---|
-| **root-array** | 记录路径 = 根数组；分页方式 NONE | `GET /warehouses`<br>DATA | 无 | NONE | 根数组（空串） | `id` | 4 |
+| **root-array** | 记录路径 = 根数组；分页方式 NONE | `GET /warehouses`<br>DATA | 无 | NONE | 根（空串） | `id` | 4 |
 | **page-number** | PAGE_NUMBER × QUERY；startFrom 1/0；不配每页数量靠空页结束 | `GET /products`<br>DATA | 无 | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 1` | `data.items` | `sku` | 57 |
 |  |  | `GET /products0`<br>DATA |  | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 0` | `data.items` | `sku` | 57 |
 |  |  | `GET /products-nosize`<br>DATA |  | PAGE_NUMBER<br>`page(QUERY)` `起始 1` `固定每页 10` | `data.items` | `sku` | 57 |
@@ -165,6 +173,7 @@ tests/                      标准库 unittest
 |  |  | `GET /suppliers-relative`<br>DATA |  | NEXT_URL<br>`next / RELATIVE` | `data` | `id` | 41 |
 |  |  | `GET /suppliers-crosshost`<br>DATA |  | NEXT_URL<br>`next / ABSOLUTE_CROSS_ORIGIN` | `data` | `id` | 41 |
 | **body-page** | PAGE_NUMBER × BODY + 请求体值类型保真 | `POST /products/query`<br>DATA | 无 | PAGE_NUMBER<br>`page(BODY)` `size(BODY)` `起始 1` | `data.items` | `sku` | 45 |
+| **next-link-only** | 只能跟随响应里 next 完整地址翻页、无任何分页参数 → 应标记为不支持 | `GET /records`<br>DATA | 无 | NEXT_URL<br>`next / ABSOLUTE_SAME_ORIGIN` | `data` | `id` | 35 |
 
 #### C 请求与响应
 
@@ -180,6 +189,12 @@ tests/                      标准库 unittest
 | **nested** | 对象字段展开 + 嵌套数组子表（子表复制父字段） | `GET /orders`<br>DATA | 无 | NONE | `data.items` | `order_no` | 12 |
 | **required-business-param** | 验证连接前检查请求值是否齐全：路径参数与 required Query 无固定值 / 无依赖 / 无测试值时返回 NEEDS_TEST_VALUES 且不发请求 | `GET /customers/{customerId}`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 1 |
 | **dotted-param** | Query 参数名含点号（filter.name / page.size）时按原名透传，不拆成嵌套对象 | `GET /items`<br>DATA | HEADER `X-Api-Key` = `test-key-123` | NONE | `data.items` | `id` | 3 |
+| **shared-params** | 公共参数识别：components.parameters + $ref（操作级 / 路径项级）；内联的同名或重复参数不应被当成公共参数 | `GET /orders`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /customers`<br>DATA |  | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /products`<br>DATA |  | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /warehouses`<br>DATA |  | NONE | `data.items` | `id` | 3 |
+| **root-object-record** | 记录路径 = 根对象 → 1 条记录；标量数组与对象数组保留为字段 | `GET /order`<br>DATA | 无 | NONE | 根（空串） | `orderNo` | 1 |
+| **form-body-post** | 业务接口请求体为 application/x-www-form-urlencoded → 应标记为不支持 | `POST /orders/search`<br>DATA | 无 | NONE | `data.items` | `id` | 6 |
 
 #### D 依赖
 
@@ -221,6 +236,28 @@ tests/                      标准库 unittest
 
 <!-- SCENARIO-TABLE:END -->
 
+### 文档格式与版本
+
+- **版本**：所有正常场景的文档都是 **OpenAPI 3.0.3**。产品口径不支持 Swagger 2.0、也不支持 OpenAPI 3.1 及以上，
+  所以 `apikey-header` / `page-number` 不再提供 `/swagger2.json`（2026-10-08 起，清单里的 `swagger2Url` 一并移除）。
+- **三种扩展名**：每个场景 `/s/<场景>/openapi.json` / `.yaml` / `.yml`，合并文档 `/openapi/<鉴权类型|all>.json` / `.yaml` / `.yml`，
+  静态目录 `openapi/` 同样每种类型三个文件。清单里 `scenarios[].openapiUrls` 与 `openapiBundleUrls` 给出三个地址
+  （`openapiUrl` / `openapiBundles` 保留，分别指 `.json` 与 `.yaml`）。
+- **同源生成，不存在三份各自维护**：在线的三种地址输出的是**同一个文档对象**（`build_openapi` / `build_bundle` 的结果），
+  只是按扩展名选 JSON 或 YAML 序列化，`.yaml` 与 `.yml` 逐字节相同；静态文件由 `tools/export_openapi_by_auth.py`
+  对同一个对象一次写出三个文件。`tests/test_docs.py` 的 `DocFormatTest` 与 `tests/test_bundle.py` 的 `StaticFormatsTest`
+  守着三者等价。
+- **反例文档（应被后端拒绝）**：不是正常场景，不计入场景数，不进合并文档；清单在 `negativeDocuments`
+  （`expectedBackendSupport = REJECTED`）。
+
+  | 文档 | 版本 | 推荐地址 | 说明 |
+  |---|---|---|---|
+  | `swagger2` | Swagger 2.0 | `/__negative/swagger2.json` | 另有 `.yaml` / `.yml` |
+  | `openapi31` | OpenAPI 3.1.0 | `/__negative/openapi31.yaml` | 另有 `.yml` / `.json` |
+
+  两份文档描述同一个最简接口 `GET /__negative/items`（真实可请求，恒定 3 条），由同一份 3.0.3 文档转换而来。
+  后端若没有拒绝而真的发了请求，`GET /__admin/requests?scenario=__negative` 查得到。
+
 ### 几个需要注意的语义
 
 | 端点 | 行为 |
@@ -230,6 +267,13 @@ tests/                      标准库 unittest
 | `cursor-body` `/events/search` | `limit` 必须是 JSON 数值 |
 | `next-url` `/suppliers-crosshost` | `next` 指向 `http://localhost:<端口>`，与文档里的 `127.0.0.1` 不同源，**后端应拒绝跟随**；拒绝时只应取到首页 15 条（`expectedTotal` 给的是数据总量 41） |
 | `oauth2-post` `/oauth/token` | 带了 `Authorization` 头返回 400（证明后端选对了 client_secret_post） |
+| `token-json-body` `/auth/token` | **只接受 `application/json`**，表单或其它 Content-Type 返回 415；Token 在 `data.token.value`、有效期在 `data.token.expiresIn`（恒为 7200，令牌不会真的过期） |
+| `token-form-body` `/auth/token` | **只接受 `application/x-www-form-urlencoded`**，JSON 返回 415；Token 在顶层 `tokenValue`（不是 `access_token`） |
+| `shared-params` `/orders` `/customers` | 3 个公共参数（`X-Tenant-Id` 头、`locale`、`apiVersion`）定义在 `components.parameters`，`/orders` 在**操作级**、`/customers` 在**路径项级**用 `$ref` 引用；缺任一个、`locale` 不在 `zh-CN` / `en-US`、`apiVersion` 非整数都返回 400。两个接口各自内联的 `keyword` 不是公共参数 |
+| `shared-params` `/products` `/warehouses` | `/products` 只引用 `locale`；`/warehouses` 不引用任何公共参数，它内联的 `locale` 与公共参数同名但可选、无枚举、**不校验**（传 `fr-FR` 也 200）。清单的 `sharedParameters` 写明每个端点的引用位置 |
+| `next-link-only` `/records` | 文档不声明任何参数，只能原样请求响应里 `next` 的完整地址；带 `page` / `page_size` / `size` / `offset` / `limit` / `cursor` 任一参数返回 400。清单 `expectedBackendSupport = UNSUPPORTED` |
+| `root-object-record` `/order` | 响应根就是一个对象（无包裹层），`recordPath` 为空串；应作为 1 条记录，`tags`（标量数组）与 `lines`（对象数组）保留为字段，见清单 `arrayFields` |
+| `form-body-post` `/orders/search` | 业务接口的请求体只声明并只接受表单，JSON 返回 415。清单 `expectedBackendSupport = UNSUPPORTED` |
 | `oauth2-basic` `/oauth/token` | 表单体里出现 `client_secret` 返回 400；签发的令牌**按使用次数失效**，默认第 3 次业务请求返回 401 |
 | `oauth2-expiring` `/oauth/token` | 令牌**按时间过期**：`expires_in` 返回实际有效秒数（默认 40），到点后业务请求 401。用于验证后端「距过期不足 30 秒提前重取」——拿到令牌后等约 15 秒再发请求，应看到令牌端点被请求 2 次且业务请求无 401 |
 | `oauth2-extra` `/oauth/token` | 令牌请求带了附加鉴权参数 `X-App-Key` 返回 400（后端约定：令牌请求不带附加参数） |
@@ -313,13 +357,13 @@ tests/                      标准库 unittest
 | 接口 | 说明 |
 |---|---|
 | `GET /health` | `{"status":"ok"}` |
-| `GET /__admin/scenarios` | 全部场景清单：文档地址、鉴权方式与测试凭证（含 `prefix` / `extraAuthParams` / `tokenFlow`）、每个端点的 `method` / `path` / `role` / `paginationType` / 分页参数名与位置 / `recordPath` / `primaryKey` / `expectedTotal` / `sampleFirst3` |
+| `GET /__admin/scenarios` | 全部场景清单：文档地址（`openapiUrl` 与三种扩展名的 `openapiUrls`）、顶层 `negativeDocuments`（反例文档）、鉴权方式与测试凭证（含 `prefix` / `extraAuthParams` / `tokenFlow`）、每个端点的 `method` / `path` / `role` / `paginationType` / 分页参数名与位置 / `recordPath` / `primaryKey` / `expectedTotal` / `sampleFirst3` |
 | `GET /__admin/requests?scenario=<名字>&limit=<N>` | 服务端实际收到的请求日志，按时间顺序；含序号、方法、路径、解码后的 Query、`rawQuery`、全部请求头、Cookie、原始请求体、响应状态码。内存最多保留最近 5000 条 |
 | `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、已签发令牌与令牌序号。**不改 config** |
 | `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位。场景名不存在返回 404 |
 | `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 6；0 表示不延迟，自测靠它跑快） |
 | `GET /__admin/state` | 当前配置、故障计数器、已签发令牌快照（排查用） |
-| `GET /openapi/<鉴权类型\|all>.yaml` / `.json` | 按鉴权类型合并的 OpenAPI 文档（见上文），同样不记日志；`/__admin/scenarios` 的 `openapiBundles` 列出全部地址 |
+| `GET /openapi/<鉴权类型\|all>.yaml` / `.yml` / `.json` | 按鉴权类型合并的 OpenAPI 文档（见上文），同样不记日志；`/__admin/scenarios` 的 `openapiBundles`（`.yaml`）与 `openapiBundleUrls`（三种扩展名）列出全部地址 |
 
 鉴权描述的结构（`/__admin/scenarios` → `scenarios[].auth`）：
 
@@ -343,8 +387,9 @@ tests/                      标准库 unittest
 }
 ```
 
-`REQUEST_TOKEN` 的 `tokenFlow` 另有 `requestBody`（登录体）、`tokenPath`（`data.accessToken`）、
-`expiresInPath`（`data.expiresIn`）。
+`REQUEST_TOKEN` 的 `tokenFlow` 另有 `contentType`（`application/json` 或 `application/x-www-form-urlencoded`，
+决定 `requestBody` 按 JSON 还是按表单提交）、`requestBody`（登录体）、`tokenPath`（如 `data.accessToken`、
+`data.token.value`、`tokenValue`）、`expiresInPath`（如 `data.expiresIn`）。
 
 ## 如何新增一个场景
 
@@ -377,6 +422,7 @@ tests/                      标准库 unittest
    `tests/test_pagination.py` 里的数量断言。
 6. 重新生成场景总表：`python3 tools/dump_scenario_table.py`，把结果贴回本文件的
    `<!-- SCENARIO-TABLE -->` 区块。
+   公共参数用 `Scenario(shared_parameters={...})` + `ref_param("组件名")` 声明，路径项级参数用 `Endpoint(path_parameters=[...])`。
 7. 重新生成按鉴权类型的文档：`python3 tools/export_openapi_by_auth.py`（新的鉴权类型会自动多出一份 YAML；
    若是新的 `AuthSpec.kind`，顺手在 `scenarios/bundle.py` 的 `KIND_TITLES` 补中文名，并更新上文的文件表）。
 
@@ -413,3 +459,4 @@ tests/                      标准库 unittest
 | 2026-09-24 | H8：新增按鉴权类型合并的 OpenAPI 文档：`openapi/<鉴权类型>.yaml` 静态文件（`tools/export_openapi_by_auth.py` 生成）与在线 `/openapi/<鉴权类型>.yaml` / `.json`；附汇总说明 `openapi/README.md`；标准库 YAML 输出器；`/__admin/scenarios` 新增 `openapiBundles`。37 个场景 / 74 个端点 / 139 条自测。 |
 | 2026-09-30 | H-SC1：新增 `required-business-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /customers/{customerId}`），路径参数 `customerId` 与 required Query `tenant` 均无 example / default、也不来自前置接口，供后端「验证连接前缺值返回 NEEDS_TEST_VALUES 且不发请求」使用；缺 `tenant` 返回 400、未知客户 404；清单新增 `requiredTestValues`。38 个场景 / 75 个端点 / 145 条自测。 |
 | 2026-10-08 | H-SC2：新增 `dotted-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /items`），Query 参数名本身带点号：必填 `filter.name`、可选整数 `page.size`，均无 example / default；记录回显 `filterName` / `pageSize`，缺或空 `filter.name` 返回 400；清单给 `requiredTestValues`。39 个场景 / 76 个端点 / 151 条自测。 |
+| 2026-10-08 | H-1008：按当日需求更新新增 6 个场景 / 11 个端点：`shared-params`（公共参数 `components.parameters` + `$ref`，操作级 / 路径项级两种引用位置，内联同名与重复参数作对照）、`token-json-body` / `token-form-body`（取 Token 接口只认一种请求体类型，另一种返回 415；Token 路径 `data.token.value` / 顶层 `tokenValue`）、`next-link-only`（只能跟随 `next` 完整地址翻页，35 条 4 页）、`root-object-record`（根对象即一条记录，含标量数组与对象数组）、`form-body-post`（表单请求体的业务 POST）；清单新增 `sharedParameters` / `arrayFields` / `expectedBackendSupport`。**文档格式**：所有文档提供 `.json` / `.yaml` / `.yml` 三种扩展名（同一文档对象序列化），清单新增 `openapiUrls` / `openapiBundleUrls`；`apikey-header` / `page-number` 不再提供 Swagger 2.0，清单移除 `swagger2Url`；新增不计入场景数的反例文档 `/__negative/swagger2.*` 与 `/__negative/openapi31.*`（清单 `negativeDocuments`）。45 个场景 / 87 个端点 / 179 条自测。 |

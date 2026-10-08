@@ -5,7 +5,8 @@
 推断（端点通过 `doc_sample` 声明文档期用的 query / body / path）。
 有副作用的端点（故障注入、令牌签发）显式声明 `response_schema`，不调用处理函数。
 
-另提供 Swagger 2.0 转换，用来守后端的 v2-converter 路径。
+正常场景的文档一律是 OpenAPI 3.0.3。Swagger 2.0 转换只给 `scenarios/negative.py` 的
+反例文档用（产品口径不支持 Swagger 2.0，后端应拒绝导入）。
 """
 
 import json
@@ -17,6 +18,9 @@ from .common import Ctx, infer_schema, truncate_example
 
 _cache = {}
 _cache_lock = threading.Lock()
+
+# 路径项（path item）里除了 HTTP 方法还可能有 parameters 等键，遍历操作时只认这些
+HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 
 ERROR_SCHEMA = {
     "type": "object",
@@ -89,7 +93,11 @@ def build_openapi(scenario, base_url):
                 "description": "凭证缺失或错误",
                 "content": {"application/json": {
                     "schema": {"$ref": "#/components/schemas/Error"}}}}
-        paths.setdefault(endpoint.path, {})[endpoint.method.lower()] = operation
+        path_item = paths.setdefault(endpoint.path, {})
+        if endpoint.path_parameters:
+            # 路径项级参数：与 get / post 并列的 parameters 键，对该路径下所有操作生效
+            path_item["parameters"] = endpoint.path_parameters
+        path_item[endpoint.method.lower()] = operation
 
     doc = {
         "openapi": "3.0.3",
@@ -102,6 +110,8 @@ def build_openapi(scenario, base_url):
         "paths": paths,
         "components": {"schemas": {"Error": ERROR_SCHEMA}},
     }
+    if scenario.shared_parameters:
+        doc["components"]["parameters"] = scenario.shared_parameters
     schemes = scenario.auth.schemes()
     if schemes:
         doc["components"]["securitySchemes"] = schemes
@@ -115,7 +125,7 @@ def build_openapi(scenario, base_url):
     return doc
 
 
-# ==================== Swagger 2.0 转换 ====================
+# ==================== Swagger 2.0 转换（仅反例文档使用） ====================
 
 def _strip_v3_only(schema):
     """v2 不认识 nullable / oneOf 等；递归去掉 nullable"""
@@ -194,6 +204,8 @@ def build_swagger2(scenario, base_url):
     paths = {}
     for path, methods in v3["paths"].items():
         for method, operation in methods.items():
+            if method not in HTTP_METHODS:
+                continue
             op_id = operation["operationId"]
             ref_name = op_id[0].upper() + op_id[1:] + "Response"
             schema = operation["responses"]["200"]["content"]["application/json"]["schema"]

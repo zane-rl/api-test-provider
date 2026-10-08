@@ -5,7 +5,7 @@ info:
   title: 测试 API 提供服务 · 鉴权：无鉴权
   version: "1.0.0"
   description: |-
-    按鉴权类型合并的测试接口文档：不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里（17 个场景 / 44 个端点）。
+    按鉴权类型合并的测试接口文档：不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里（21 个场景 / 51 个端点）。
 
     - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
     - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
@@ -86,6 +86,14 @@ tags:
       extraAuthParams: []
       tokenFlow: null
     x-openapi-url: http://127.0.0.1:18090/s/body-page/openapi.json
+  - name: next-link-only
+    description: 只支持 next 链接分页（B 分页）：只能跟随响应里 next 完整地址翻页、无任何分页参数 → 应标记为不支持
+    x-auth:
+      type: none
+      credentials: []
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/next-link-only/openapi.json
   - name: echo
     description: 请求回显（C 请求与响应）：Query / 请求体编码与类型保真验证
     x-auth:
@@ -118,6 +126,30 @@ tags:
       extraAuthParams: []
       tokenFlow: null
     x-openapi-url: http://127.0.0.1:18090/s/nested/openapi.json
+  - name: shared-params
+    description: 公共参数（components.parameters）（C 请求与响应）：公共参数识别：components.parameters + $ref（操作级 / 路径项级）；内联的同名或重复参数不应被当成公共参数
+    x-auth:
+      type: none
+      credentials: []
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/shared-params/openapi.json
+  - name: root-object-record
+    description: 根对象作为一条记录（C 请求与响应）：记录路径 = 根对象 → 1 条记录；标量数组与对象数组保留为字段
+    x-auth:
+      type: none
+      credentials: []
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/root-object-record/openapi.json
+  - name: form-body-post
+    description: 表单请求体的业务 POST（C 请求与响应）：业务接口请求体为 application/x-www-form-urlencoded → 应标记为不支持
+    x-auth:
+      type: none
+      credentials: []
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/form-body-post/openapi.json
   - name: depend-path
     description: 路径参数依赖（D 依赖）：前置依赖映射 × PATH；逐父记录条数不同
     x-auth:
@@ -1668,6 +1700,105 @@ paths:
         expectedTotal: 45
         requiresAuth: true
         note: page / size 写成字符串返回 400，用于守 KEY_VALUE 请求体的类型保真
+  /s/next-link-only/records:
+    get:
+      operationId: nextLinkOnly_listNextLinkOnlyRecords
+      summary: 查询记录列表（只能用 next 链接翻页）
+      description: "共 35 条，每页固定 10 条，共 4 页。**只能使用响应里 next 给出的完整地址翻页**：首页不带任何参数，之后原样请求 next，末页 next 为 null。本接口不接受 page / offset / cursor 等任何分页参数（带了返回 400）"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        category:
+                          type: string
+                        price:
+                          type: number
+                        quantity:
+                          type: integer
+                        active:
+                          type: boolean
+                        updated_at:
+                          type: string
+                          format: date-time
+                        remark:
+                          type: string
+                          nullable: true
+                        spec:
+                          type: object
+                          properties:
+                            length:
+                              type: number
+                            width:
+                              type: number
+                            unit:
+                              type: string
+                  next:
+                    type: string
+              example:
+                data:
+                  - id: NLO-00001
+                    name: NLO物料1
+                    category: 整机
+                    price: 11.27
+                    quantity: 13
+                    active: true
+                    updated_at: "2026-01-01T09:00:00+08:00"
+                    remark: 备注1
+                    spec:
+                      length: 11.5
+                      width: 6.25
+                      unit: cm
+                  - id: NLO-00002
+                    name: NLO物料2
+                    category: 配件
+                    price: 12.64
+                    quantity: 26
+                    active: true
+                    updated_at: "2026-01-01T10:00:00+08:00"
+                    remark: 备注2
+                    spec:
+                      length: 12.5
+                      width: 7.25
+                      unit: cm
+                next: http://127.0.0.1:18090/s/next-link-only/records?_next=nlo-10
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listNextLinkOnlyRecords
+      tags:
+        - next-link-only
+      x-scenario: next-link-only
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NEXT_URL
+        pagination:
+          nextUrlPath: next
+          pageSize: 10
+          nextUrlStyle: ABSOLUTE_SAME_ORIGIN
+        recordPath: data
+        primaryKey: id
+        expectedTotal: 35
+        requiresAuth: true
+        note: 只支持 next 完整地址翻页：后端应标记为不支持；带 page / page_size / size / offset / limit / cursor 任一参数返回 400
+        expectedBackendSupport: UNSUPPORTED
+        pageCount: 4
   /s/echo/echo:
     get:
       operationId: echo_listEchoedQuery
@@ -2414,6 +2545,762 @@ paths:
         expectedTotal: 12
         requiresAuth: true
         note: "子表 data.items[].lines 共 24 行（主键 order_no + line_no）"
+  /s/shared-params/orders:
+    get:
+      operationId: sharedParams_listSharedParamOrders
+      summary: 查询订单（操作级引用全部公共参数）
+      description: 在操作级用 $ref 引用全部 3 个公共参数；另内联声明可选的 keyword。公共参数缺失或 locale 不在枚举内返回 400。每条记录回显收到的 tenantId / locale / apiVersion
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            tenantId:
+                              type: string
+                            locale:
+                              type: string
+                            apiVersion:
+                              type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: SP-ORD-00001
+                      name: SP-ORD物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      tenantId: tenant-001
+                      locale: zh-CN
+                      apiVersion: 2
+                    - id: SP-ORD-00002
+                      name: SP-ORD物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                      tenantId: tenant-001
+                      locale: zh-CN
+                      apiVersion: 2
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - "$ref": "#/components/parameters/shared-params.TenantId"
+        - "$ref": "#/components/parameters/shared-params.Locale"
+        - "$ref": "#/components/parameters/shared-params.ApiVersion"
+        - name: keyword
+          in: query
+          required: false
+          description: 按名称包含过滤，可不传（本接口内联声明，不是公共参数）
+          schema:
+            type: string
+      x-original-operation-id: listSharedParamOrders
+      tags:
+        - shared-params
+      x-scenario: shared-params
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 3
+        requiresAuth: true
+        requiredTestValues:
+          - in: HEADER
+            name: X-Tenant-Id
+            testValue: tenant-001
+          - in: QUERY
+            name: locale
+            testValue: zh-CN
+          - in: QUERY
+            name: apiVersion
+            testValue: "2"
+        sharedParameters:
+          refLocation: operation
+          refs:
+            - component: TenantId
+              in: HEADER
+              name: X-Tenant-Id
+            - component: Locale
+              in: QUERY
+              name: locale
+            - component: ApiVersion
+              in: QUERY
+              name: apiVersion
+          inlineParameters:
+            - in: QUERY
+              name: keyword
+  /s/shared-params/customers:
+    parameters:
+      - "$ref": "#/components/parameters/shared-params.TenantId"
+      - "$ref": "#/components/parameters/shared-params.Locale"
+      - "$ref": "#/components/parameters/shared-params.ApiVersion"
+    get:
+      operationId: sharedParams_listSharedParamCustomers
+      summary: 查询客户（路径项级引用全部公共参数）
+      description: "3 个公共参数写在路径项（path item）的 parameters 里用 $ref 引用，操作级只有内联的 keyword。公共参数缺失或 locale 不在枚举内返回 400。每条记录回显收到的 tenantId / locale / apiVersion"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            tenantId:
+                              type: string
+                            locale:
+                              type: string
+                            apiVersion:
+                              type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: SP-CUS-00001
+                      name: SP-CUS物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      tenantId: tenant-001
+                      locale: zh-CN
+                      apiVersion: 2
+                    - id: SP-CUS-00002
+                      name: SP-CUS物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                      tenantId: tenant-001
+                      locale: zh-CN
+                      apiVersion: 2
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          description: 按名称包含过滤，可不传（本接口内联声明，不是公共参数）
+          schema:
+            type: string
+      x-original-operation-id: listSharedParamCustomers
+      tags:
+        - shared-params
+      x-scenario: shared-params
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 3
+        requiresAuth: true
+        requiredTestValues:
+          - in: HEADER
+            name: X-Tenant-Id
+            testValue: tenant-001
+          - in: QUERY
+            name: locale
+            testValue: zh-CN
+          - in: QUERY
+            name: apiVersion
+            testValue: "2"
+        sharedParameters:
+          refLocation: pathItem
+          refs:
+            - component: TenantId
+              in: HEADER
+              name: X-Tenant-Id
+            - component: Locale
+              in: QUERY
+              name: locale
+            - component: ApiVersion
+              in: QUERY
+              name: apiVersion
+          inlineParameters:
+            - in: QUERY
+              name: keyword
+  /s/shared-params/products:
+    get:
+      operationId: sharedParams_listSharedParamProducts
+      summary: 查询商品（只引用公共参数 locale）
+      description: 只引用公共参数 Locale；不需要 X-Tenant-Id 与 apiVersion（记录里这两项恒为 null）。locale 缺失或不在枚举内返回 400
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            tenantId:
+                              nullable: true
+                              type: string
+                            locale:
+                              type: string
+                            apiVersion:
+                              nullable: true
+                              type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: SP-PRD-00001
+                      name: SP-PRD物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      tenantId: null
+                      locale: zh-CN
+                      apiVersion: null
+                    - id: SP-PRD-00002
+                      name: SP-PRD物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                      tenantId: null
+                      locale: zh-CN
+                      apiVersion: null
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - "$ref": "#/components/parameters/shared-params.Locale"
+      x-original-operation-id: listSharedParamProducts
+      tags:
+        - shared-params
+      x-scenario: shared-params
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 3
+        requiresAuth: true
+        requiredTestValues:
+          - in: QUERY
+            name: locale
+            testValue: zh-CN
+        sharedParameters:
+          refLocation: operation
+          refs:
+            - component: Locale
+              in: QUERY
+              name: locale
+          inlineParameters: []
+  /s/shared-params/warehouses:
+    get:
+      operationId: sharedParams_listSharedParamWarehouses
+      summary: 查询仓库（不引用任何公共参数）
+      description: 不引用任何公共参数；内联声明的 locale 与公共参数同名，但可选、无枚举、服务端不校验，任意值或不传都返回 200，收到的值原样回显在记录的 locale 里
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            tenantId:
+                              nullable: true
+                              type: string
+                            locale:
+                              nullable: true
+                              type: string
+                            apiVersion:
+                              nullable: true
+                              type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: SP-WH-00001
+                      name: SP-WH物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      tenantId: null
+                      locale: null
+                      apiVersion: null
+                    - id: SP-WH-00002
+                      name: SP-WH物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                      tenantId: null
+                      locale: null
+                      apiVersion: null
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: locale
+          in: query
+          required: false
+          description: 本接口自用的展示语言，任意字符串、可不传；与公共参数 locale 同名但没有走公共定义，没有枚举限制
+          schema:
+            type: string
+      x-original-operation-id: listSharedParamWarehouses
+      tags:
+        - shared-params
+      x-scenario: shared-params
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 3
+        requiresAuth: true
+        requiredTestValues: []
+        sharedParameters:
+          refLocation: null
+          refs: []
+          inlineParameters:
+            - in: QUERY
+              name: locale
+  /s/root-object-record/order:
+    get:
+      operationId: rootObjectRecord_getRootOrder
+      summary: 查询单个订单（根对象）
+      description: 响应的根就是一个对象，没有 code / data 包裹层；根对象里同时有标量字段、标量数组 tags 与对象数组 lines。应把根对象当作 1 条记录，数组保留为字段
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderNo:
+                    type: string
+                  status:
+                    type: string
+                  amount:
+                    type: number
+                  urgent:
+                    type: boolean
+                  createdAt:
+                    type: string
+                    format: date-time
+                  remark:
+                    type: string
+                    nullable: true
+                  tags:
+                    type: array
+                    items:
+                      type: string
+                  lines:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        lineNo:
+                          type: integer
+                        sku:
+                          type: string
+                        quantity:
+                          type: integer
+                        price:
+                          type: number
+              example:
+                orderNo: ROOT-ORD-00001
+                status: PAID
+                amount: 237.5
+                urgent: false
+                createdAt: "2026-01-01T08:00:00+08:00"
+                remark: null
+                tags:
+                  - a
+                  - b
+                lines:
+                  - lineNo: 1
+                    sku: PRD-00001
+                    quantity: 2
+                    price: 11.27
+                  - lineNo: 2
+                    sku: PRD-00002
+                    quantity: 3
+                    price: 12.64
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: getRootOrder
+      tags:
+        - root-object-record
+      x-scenario: root-object-record
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: ""
+        primaryKey: orderNo
+        expectedTotal: 1
+        requiresAuth: true
+        note: 根对象即一条记录：tags / lines 应保留为该记录的数组字段，不应被展开成多条记录
+        arrayFields:
+          tags: SCALAR_ARRAY
+          lines: OBJECT_ARRAY
+  /s/form-body-post/orders/search:
+    post:
+      operationId: formBodyPost_searchOrdersByForm
+      summary: 按条件查询订单（表单请求体）
+      description: 请求体只接受 application/x-www-form-urlencoded（字段 keyword / status 均可选，都不传返回全部 6 条）；用 JSON 或其它 Content-Type 提交返回 415
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            status:
+                              type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: FBP-00001
+                      name: FBP物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      status: PAID
+                    - id: FBP-00002
+                      name: FBP物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                      status: SHIPPED
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                keyword:
+                  type: string
+                  description: 按名称包含过滤
+                status:
+                  type: string
+                  enum:
+                    - NEW
+                    - PAID
+                    - SHIPPED
+      x-original-operation-id: searchOrdersByForm
+      tags:
+        - form-body-post
+      x-scenario: form-body-post
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 6
+        requiresAuth: true
+        note: 请求体为表单的业务接口：后端应标记为不支持；误用 JSON 提交会收到 415
+        expectedBackendSupport: UNSUPPORTED
+        requestContentType: application/x-www-form-urlencoded
   /s/depend-path/products:
     get:
       operationId: dependPath_listDependProducts
@@ -4055,4 +4942,29 @@ components:
         message:
           type: string
       description: 错误响应体
+  parameters:
+    shared-params.TenantId:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      description: 租户 ID（公共参数）
+      schema:
+        type: string
+    shared-params.Locale:
+      name: locale
+      in: query
+      required: true
+      description: 语言（公共参数）
+      schema:
+        type: string
+        enum:
+          - zh-CN
+          - en-US
+    shared-params.ApiVersion:
+      name: apiVersion
+      in: query
+      required: true
+      description: 接口版本号（公共参数）
+      schema:
+        type: integer
 x-auth-type: none

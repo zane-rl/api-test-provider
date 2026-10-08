@@ -1,0 +1,174 @@
+# 由 tools/export_openapi_by_auth.py 生成，勿手改。
+# servers 固定为 http://127.0.0.1:18090；换端口时改用服务在线提供的 /openapi/fixedParam.yml
+openapi: "3.0.3"
+info:
+  title: 测试 API 提供服务 · 鉴权：固定参数
+  version: "1.0.0"
+  description: |-
+    按鉴权类型合并的测试接口文档：Header + Query + Cookie 三处同时带固定值（1 个场景 / 1 个端点）。
+
+    - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
+    - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
+    - x-test.role：DATA 业务接口 / TOKEN 登录与令牌接口（不要当数据接口调）/ FAULT 故障注入。
+    - 每次测试前 POST http://127.0.0.1:18090/__admin/reset?scenario=<场景> 复位，调用后查 http://127.0.0.1:18090/__admin/requests。
+servers:
+  - url: http://127.0.0.1:18090
+tags:
+  - name: fixed-param
+    description: 固定参数鉴权（三个位置）（A 鉴权）：FIXED_PARAM：Header + Query + Cookie 同时必填
+    x-auth:
+      type: fixedParam
+      credentials:
+        - in: HEADER
+          name: X-App-Id
+          testValue: app-001
+          prefix: null
+        - in: QUERY
+          name: sign
+          testValue: test-sign
+          prefix: null
+        - in: COOKIE
+          name: tenant
+          testValue: t-001
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/fixed-param/openapi.json
+paths:
+  /s/fixed-param/items:
+    get:
+      operationId: fixedParam_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: FIXED-PARAM-00001
+                      name: FIXED-PARAM物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: FIXED-PARAM-00002
+                      name: FIXED-PARAM物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - fixed-param
+      security:
+        - fixed-param.apiKeyHeader: []
+          fixed-param.apiKeyQuery: []
+          fixed-param.apiKeyCookie: []
+      x-scenario: fixed-param
+      x-auth-type: fixedParam
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+      description: 错误响应体
+  securitySchemes:
+    fixed-param.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-App-Id
+      description: 测试 API Key，固定值 app-001
+    fixed-param.apiKeyQuery:
+      type: apiKey
+      in: query
+      name: sign
+      description: 测试 API Key，固定值 test-sign
+    fixed-param.apiKeyCookie:
+      type: apiKey
+      in: cookie
+      name: tenant
+      description: 测试 API Key，固定值 t-001
+x-auth-type: fixedParam

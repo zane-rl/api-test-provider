@@ -30,14 +30,30 @@ from urllib.parse import parse_qs, unquote, urlparse
 from scenarios import REGISTRY, reset_all
 from scenarios import auth as auth_module
 from scenarios import faults as faults_module
+from scenarios import negative as negative_module
 from scenarios.common import ApiError, Ctx, Resp, error_resp, json_resp, token_snapshot
 from scenarios.bundle import build_bundle, bundle_names
-from scenarios.openapi import build_openapi, build_swagger2
+from scenarios.openapi import build_openapi
 from scenarios.yamlout import dump as yaml_dump
 
 MAX_LOG = 5000
 MAX_BODY_BYTES = 10 * 1024 * 1024      # 请求体上限，防止分块读取被撑爆
 MAX_CHUNK_LINE = 65536                 # 块长度行 / trailer 行的最大长度
+
+# 文档的三种扩展名：同一份文档对象，只是序列化方式不同（.yaml 与 .yml 字节完全相同）
+DOC_EXTENSIONS = ("json", "yaml", "yml")
+
+
+def doc_response(doc, ext):
+    """把一份文档按扩展名输出：json 走 JSON，yaml / yml 走 YAML"""
+    if ext == "json":
+        return json_resp(doc)
+    return Resp(raw=yaml_dump(doc).encode("utf-8"), content_type="application/yaml; charset=utf-8")
+
+
+def doc_urls(prefix):
+    """{扩展名: 地址}，prefix 是不带扩展名的文档地址"""
+    return {ext: "%s.%s" % (prefix, ext) for ext in DOC_EXTENSIONS}
 
 
 # ==================== 请求日志 ====================
@@ -258,6 +274,8 @@ class Handler(BaseHTTPRequestHandler):
             return unquote(segments[1])
         if path.startswith("/__admin"):
             return "__admin"
+        if path.startswith(negative_module.PREFIX + "/"):
+            return negative_module.NAME
         if path == "/health":
             return "__health"
         return None
@@ -279,6 +297,9 @@ class Handler(BaseHTTPRequestHandler):
             return error_resp(405, "只读测试服务，不接受 %s" % method,
                               {"Allow": "GET, POST"})
 
+        if path.startswith(negative_module.PREFIX + "/"):
+            return self._negative(method, path, query_all, body_raw)
+
         segments = [unquote(s) for s in path.split("/") if s]
         if not segments or segments[0] != "s" or len(segments) < 2:
             return error_resp(404, "无此路径：%s（业务路径形如 /s/<场景>/<端点>）" % path)
@@ -290,13 +311,9 @@ class Handler(BaseHTTPRequestHandler):
         rest = segments[2:]
         base_url = "%s/s/%s" % (self.server.advertise_base, scenario.name)
 
-        # 文档端点本身不需要鉴权，也不写进文档
-        if rest == ["openapi.json"]:
-            return json_resp(build_openapi(scenario, base_url))
-        if rest == ["swagger2.json"]:
-            if not scenario.swagger2:
-                return error_resp(404, "场景 %s 未提供 Swagger 2.0 文档" % scenario.name)
-            return json_resp(build_swagger2(scenario, base_url))
+        # 文档端点本身不需要鉴权，也不写进文档；三种扩展名内容等价
+        if len(rest) == 1 and rest[0] in ["openapi." + ext for ext in DOC_EXTENSIONS]:
+            return doc_response(build_openapi(scenario, base_url), rest[0].rpartition(".")[2])
 
         endpoint, path_params = scenario.match(method, rest)
         if endpoint == "405":
@@ -321,13 +338,30 @@ class Handler(BaseHTTPRequestHandler):
         if method != "GET":
             return error_resp(405, "文档只支持 GET", {"Allow": "GET"})
         name, _, ext = path[len("/openapi/"):].rpartition(".")
-        if ext not in ("yaml", "yml", "json") or name not in bundle_names():
-            return error_resp(404, "无此文档：%s（可用：%s，后缀 .yaml / .json）"
+        if ext not in DOC_EXTENSIONS or name not in bundle_names():
+            return error_resp(404, "无此文档：%s（可用：%s，后缀 .yaml / .yml / .json）"
                               % (path, " / ".join(bundle_names())))
-        doc = build_bundle(name, self.server.advertise_base)
-        if ext == "json":
-            return json_resp(doc)
-        return Resp(raw=yaml_dump(doc).encode("utf-8"), content_type="application/yaml; charset=utf-8")
+        return doc_response(build_bundle(name, self.server.advertise_base), ext)
+
+    # ---------- 反例文档（应被后端拒绝的文档版本） ----------
+
+    def _negative(self, method, path, query_all, body_raw):
+        """/__negative/<swagger2|openapi31>.<json|yaml|yml> 与它们描述的 GET /__negative/items"""
+        rest = [unquote(s) for s in path.split("/") if s][1:]
+        base_url = self.server.advertise_base + negative_module.PREFIX
+        if len(rest) == 1:
+            name, _, ext = rest[0].rpartition(".")
+            if name in negative_module.DOCUMENTS and ext in DOC_EXTENSIONS:
+                return doc_response(
+                    negative_module.build_document(name, self.server.advertise_base), ext)
+        endpoint, path_params = negative_module.SCENARIO.match(method, rest)
+        if endpoint == "405":
+            return error_resp(405, "路径存在但不支持 %s 方法" % method, {"Allow": "GET"})
+        if endpoint is None:
+            return error_resp(404, "无此反例路径：%s（可用文档：%s，后缀 .json / .yaml / .yml）"
+                              % (path, " / ".join(negative_module.DOCUMENTS)))
+        return endpoint.handler(Ctx(negative_module.NAME, method, path, path_params,
+                                    query_all, dict(self.headers.items()), body_raw, base_url))
 
     # ---------- admin ----------
 
@@ -351,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/__admin/reset" and method == "POST":
             name = (query_all.get("scenario") or [None])[0]
-            if name is not None and name not in REGISTRY:
+            if name is not None and name not in REGISTRY and name != negative_module.NAME:
                 raise ApiError(404, "无此场景：%s（可用场景见 /__admin/scenarios）" % name)
             removed = self.server.request_log.clear(name)
             reset_all(name)
@@ -388,12 +422,18 @@ class Handler(BaseHTTPRequestHandler):
                 "covers": scenario.covers,
                 "baseUrl": scenario_base,
                 "openapiUrl": scenario_base + "/openapi.json",
-                "swagger2Url": (scenario_base + "/swagger2.json") if scenario.swagger2 else None,
+                # 同一份文档的三种扩展名（内容等价）
+                "openapiUrls": doc_urls(scenario_base + "/openapi"),
                 "auth": scenario.auth.describe(scenario_base),
                 "endpoints": [e.catalog(scenario_base) for e in scenario.endpoints],
             })
         bundles = {name: "%s/openapi/%s.yaml" % (base, name) for name in bundle_names()}
-        return {"baseUrl": base, "count": len(items), "openapiBundles": bundles, "scenarios": items}
+        bundle_urls = {name: doc_urls("%s/openapi/%s" % (base, name)) for name in bundle_names()}
+        return {"baseUrl": base, "count": len(items), "openapiBundles": bundles,
+                "openapiBundleUrls": bundle_urls,
+                # 应被后端拒绝的文档版本，不是正常场景、不计入 count
+                "negativeDocuments": negative_module.catalog(base, DOC_EXTENSIONS),
+                "scenarios": items}
 
 
 def _parse_cookies(raw):
@@ -435,8 +475,10 @@ def main():
     print("  场景清单：%s/__admin/scenarios" % base)
     print("  请求日志：%s/__admin/requests?scenario=<名字>&limit=50" % base)
     print("  健康检查：%s/health" % base)
-    print("  某场景文档：%s/s/page-number/openapi.json" % base)
-    print("  按鉴权合并的文档：%s/openapi/<%s>.yaml" % (base, "|".join(bundle_names())))
+    print("  某场景文档：%s/s/page-number/openapi.<json|yaml|yml>" % base)
+    print("  按鉴权合并的文档：%s/openapi/<%s>.<yaml|yml|json>" % (base, "|".join(bundle_names())))
+    print("  反例文档（应被拒绝）：%s%s/<%s>.<json|yaml|yml>"
+          % (base, negative_module.PREFIX, "|".join(negative_module.DOCUMENTS)))
     print("  Ctrl+C 退出")
     sys.stdout.flush()      # 输出重定向到文件时也能立刻看到启动横幅
     try:

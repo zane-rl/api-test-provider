@@ -132,6 +132,11 @@ class Ctx:
         return self._lower.get(name.lower())
 
     @property
+    def media_type(self):
+        """Content-Type 的媒体类型：小写、去掉 charset 等参数；没带返回空串"""
+        return (self.header("Content-Type") or "").split(";")[0].strip().lower()
+
+    @property
     def cookies(self):
         raw = self.header("Cookie")
         if not raw:
@@ -183,6 +188,17 @@ class Ctx:
 
 class _Unset:
     pass
+
+
+JSON_MEDIA_TYPE = "application/json"
+FORM_MEDIA_TYPE = "application/x-www-form-urlencoded"
+
+
+def require_media_type(ctx, expected):
+    """只接受指定 Content-Type 的端点用：不符（含没带）一律 415"""
+    if ctx.media_type != expected:
+        raise ApiError(415, "不支持的 Content-Type：%s，本接口只接受 %s"
+                       % (ctx.header("Content-Type") or "（未提供）", expected))
 
 
 _UNSET = _Unset()
@@ -472,6 +488,11 @@ def pp(name, type_="string", description=""):
             "description": description, "schema": {"type": type_}}
 
 
+def ref_param(component):
+    """引用场景级公共参数（`Scenario.shared_parameters` 的键），文档里输出为 $ref"""
+    return {"$ref": "#/components/parameters/%s" % component}
+
+
 def json_body(schema, example=None, required=True):
     content = {"schema": schema}
     if example is not None:
@@ -491,7 +512,7 @@ class Endpoint:
     """一个端点。处理函数、文档声明、清单元数据写在一起。"""
 
     def __init__(self, method, path, handler, operation_id, summary,
-                 description="", parameters=(), request_body=None,
+                 description="", parameters=(), path_parameters=(), request_body=None,
                  auth=True, role="DATA", pagination=None, record_path=None,
                  primary_key=None, dataset=None, expected_total=None,
                  doc_sample=None, response_schema=None, response_example=None,
@@ -503,6 +524,8 @@ class Endpoint:
         self.summary = summary
         self.description = description
         self.parameters = list(parameters)
+        # 写在「路径项级」（path item 的 parameters）而不是操作级的参数声明
+        self.path_parameters = list(path_parameters)
         self.request_body = request_body
         self.auth = auth                      # False = 该端点不需要鉴权（登录 / 令牌端点）
         self.role = role                      # DATA 业务数据 / TOKEN 登录与令牌 / FAULT 故障注入
@@ -575,14 +598,15 @@ class Scenario:
     """一个场景：独立前缀、独立鉴权、独立数据"""
 
     def __init__(self, name, title, covers, endpoints, auth=None,
-                 description="", swagger2=False):
+                 description="", shared_parameters=None):
         self.name = name
         self.title = title
         self.covers = covers                  # 覆盖的后端能力，写进 README 与清单
         self.endpoints = list(endpoints)
         self.auth = auth or NO_AUTH
         self.description = description or title
-        self.swagger2 = swagger2              # 是否额外提供 Swagger 2.0 文档
+        # 公共参数 {组件名: 参数声明}，输出到文档的 components.parameters，端点用 ref_param 引用
+        self.shared_parameters = dict(shared_parameters or {})
 
     def prefix(self):
         return "/s/" + self.name

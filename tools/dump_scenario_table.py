@@ -15,7 +15,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from urllib.parse import urlencode  # noqa: E402
+
 from scenarios import REGISTRY  # noqa: E402
+from scenarios.common import FORM_MEDIA_TYPE  # noqa: E402
 
 BASE = "http://127.0.0.1:18090"
 
@@ -30,10 +33,12 @@ def auth_cell(scenario, base):
               for e in spec["extraAuthParams"]]
     flow = spec["tokenFlow"]
     if flow and flow["kind"] == "REQUEST_TOKEN":
-        parts.append("令牌：`POST %s`，体 `%s`，取 `%s`"
-                     % (flow["url"].replace(base, ""),
-                        json.dumps(flow["requestBody"], ensure_ascii=False),
-                        flow["tokenPath"]))
+        if flow.get("contentType") == FORM_MEDIA_TYPE:
+            body = "表单 `%s`" % urlencode(flow["requestBody"])
+        else:
+            body = "体 `%s`" % json.dumps(flow["requestBody"], ensure_ascii=False)
+        parts.append("令牌：`POST %s`，%s，取 `%s`"
+                     % (flow["url"].replace(base, ""), body, flow["tokenPath"]))
     elif flow:
         parts.append("令牌：`POST %s`，client_secret_%s，`%s` / `%s`"
                      % (flow["url"].replace(base, ""), flow["clientAuthMethod"],
@@ -59,6 +64,13 @@ def pagination_cell(catalog):
     return "%s<br>%s" % (kind, " ".join("`%s`" % d for d in detail))
 
 
+def record_path_cell(catalog):
+    """记录路径：空串表示响应的根（根数组，或根对象即一条记录）"""
+    if catalog["recordPath"] == "":
+        return "根（空串）"
+    return "`%s`" % catalog["recordPath"] if catalog["recordPath"] else "—"
+
+
 def main():
     group = None
     for name, scenario in REGISTRY.items():
@@ -78,8 +90,7 @@ def main():
                 endpoint.method, endpoint.path, catalog["role"],
                 auth_cell(scenario, base) if first else "",
                 pagination_cell(catalog),
-                "根数组（空串）" if catalog["recordPath"] == "" else (
-                    "`%s`" % catalog["recordPath"] if catalog["recordPath"] else "—"),
+                record_path_cell(catalog),
                 "`%s`" % catalog["primaryKey"] if catalog["primaryKey"] else "无",
                 "—" if total is None else total))
 

@@ -5,7 +5,7 @@ info:
   title: 测试 API 提供服务 · 鉴权：Bearer Token
   version: "1.0.0"
   description: |-
-    按鉴权类型合并的测试接口文档：固定令牌，或先调登录接口取令牌再注入 Header / Query（6 个场景 / 10 个端点）。
+    按鉴权类型合并的测试接口文档：固定令牌，或先调登录接口取令牌再注入 Header / Query（8 个场景 / 14 个端点）。
 
     - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
     - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
@@ -137,6 +137,60 @@ tags:
       extraAuthParams: []
       tokenFlow: null
     x-openapi-url: http://127.0.0.1:18090/s/forbidden/openapi.json
+  - name: token-json-body
+    description: Bearer 取 Token（JSON 请求体，Token 在嵌套路径）（A 鉴权）：取 Token 接口只收 application/json；Token 路径 data.token.value 且带有效期字段
+    x-auth:
+      type: bearer
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: "<由令牌接口签发>"
+          prefix: Bearer
+          note: 注入到 HEADER Authorization，带前缀 Bearer
+      extraAuthParams: []
+      tokenFlow:
+        kind: REQUEST_TOKEN
+        method: POST
+        contentType: application/json
+        requestBody:
+          appKey: test-client
+          appSecret: test-secret
+        tokenPath: data.token.value
+        expiresInPath: data.token.expiresIn
+        expiresInSeconds: 7200
+        inject:
+          in: HEADER
+          name: Authorization
+          prefix: Bearer
+        url: http://127.0.0.1:18090/s/token-json-body/auth/token
+    x-openapi-url: http://127.0.0.1:18090/s/token-json-body/openapi.json
+  - name: token-form-body
+    description: Bearer 取 Token（表单请求体，Token 字段名非 access_token）（A 鉴权）：取 Token 接口只收 application/x-www-form-urlencoded；Token 在顶层 tokenValue
+    x-auth:
+      type: bearer
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: "<由令牌接口签发>"
+          prefix: Bearer
+          note: 注入到 HEADER Authorization，带前缀 Bearer
+      extraAuthParams: []
+      tokenFlow:
+        kind: REQUEST_TOKEN
+        method: POST
+        contentType: application/x-www-form-urlencoded
+        requestBody:
+          appKey: test-client
+          appSecret: test-secret
+        tokenPath: tokenValue
+        expiresInPath: expiresIn
+        expiresInSeconds: 7200
+        inject:
+          in: HEADER
+          name: Authorization
+          prefix: Bearer
+        url: http://127.0.0.1:18090/s/token-form-body/auth/token
+    x-openapi-url: http://127.0.0.1:18090/s/token-form-body/openapi.json
 paths:
   /s/bearer-static/items:
     get:
@@ -1046,6 +1100,356 @@ paths:
         primaryKey: id
         expectedTotal: 20
         requiresAuth: true
+  /s/token-json-body/auth/token:
+    post:
+      operationId: tokenJsonBody_issueAccessToken
+      summary: 签发访问 Token（写操作，不要勾选为数据接口）
+      description: 只接受 application/json 请求体，用其它 Content-Type 提交返回 415；appKey / appSecret 错误返回 401。Token 在响应的 data.token.value，有效期（秒）在 data.token.expiresIn
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      token:
+                        type: object
+                        properties:
+                          value:
+                            type: string
+                          expiresIn:
+                            type: integer
+                          type:
+                            type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  token:
+                    value: tok-token-json-body-1
+                    expiresIn: 7200
+                    type: Bearer
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - appKey
+                - appSecret
+              properties:
+                appKey:
+                  type: string
+                appSecret:
+                  type: string
+            example:
+              appKey: test-client
+              appSecret: test-secret
+      security: []
+      x-original-operation-id: issueAccessToken
+      tags:
+        - token-json-body
+      x-scenario: token-json-body
+      x-auth-type: bearer
+      x-test:
+        role: TOKEN
+        paginationType: NONE
+        pagination: {}
+        recordPath: null
+        primaryKey: null
+        expectedTotal: null
+        requiresAuth: false
+  /s/token-json-body/items:
+    get:
+      operationId: tokenJsonBody_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: TOKEN-JSON-BODY-00001
+                      name: TOKEN-JSON-BODY物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: TOKEN-JSON-BODY-00002
+                      name: TOKEN-JSON-BODY物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - token-json-body
+      security:
+        - token-json-body.tokenAuth: []
+      x-scenario: token-json-body
+      x-auth-type: bearer
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/token-form-body/auth/token:
+    post:
+      operationId: tokenFormBody_issueAccessToken
+      summary: 签发访问 Token（写操作，不要勾选为数据接口）
+      description: 只接受 application/x-www-form-urlencoded 请求体，用其它 Content-Type 提交返回 415；appKey / appSecret 错误返回 401。Token 在响应的 tokenValue，有效期（秒）在 expiresIn
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokenValue:
+                    type: string
+                  expiresIn:
+                    type: integer
+                  tokenType:
+                    type: string
+              example:
+                tokenValue: tok-token-form-body-1
+                expiresIn: 7200
+                tokenType: Bearer
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - appKey
+                - appSecret
+              properties:
+                appKey:
+                  type: string
+                appSecret:
+                  type: string
+            example:
+              appKey: test-client
+              appSecret: test-secret
+      security: []
+      x-original-operation-id: issueAccessToken
+      tags:
+        - token-form-body
+      x-scenario: token-form-body
+      x-auth-type: bearer
+      x-test:
+        role: TOKEN
+        paginationType: NONE
+        pagination: {}
+        recordPath: null
+        primaryKey: null
+        expectedTotal: null
+        requiresAuth: false
+  /s/token-form-body/items:
+    get:
+      operationId: tokenFormBody_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: TOKEN-FORM-BODY-00001
+                      name: TOKEN-FORM-BODY物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: TOKEN-FORM-BODY-00002
+                      name: TOKEN-FORM-BODY物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - token-form-body
+      security:
+        - token-form-body.tokenAuth: []
+      x-scenario: token-form-body
+      x-auth-type: bearer
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
 components:
   schemas:
     Error:
@@ -1093,4 +1497,12 @@ components:
       type: http
       scheme: bearer
       description: 固定测试令牌 test-token-abc
+    token-json-body.tokenAuth:
+      type: http
+      scheme: bearer
+      description: Token 获取地址：POST http://127.0.0.1:18090/s/token-json-body/auth/token，请求体类型 application/json，字段 appKey=test-client、appSecret=test-secret；Token 字段路径 data.token.value，有效期（秒）字段路径 data.token.expiresIn；业务接口放在请求头 Authorization，带前缀 Bearer
+    token-form-body.tokenAuth:
+      type: http
+      scheme: bearer
+      description: Token 获取地址：POST http://127.0.0.1:18090/s/token-form-body/auth/token，请求体类型 application/x-www-form-urlencoded，字段 appKey=test-client、appSecret=test-secret；Token 字段路径 tokenValue，有效期（秒）字段路径 expiresIn；业务接口放在请求头 Authorization，带前缀 Bearer
 x-auth-type: bearer

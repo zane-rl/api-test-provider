@@ -31,7 +31,7 @@ class PaginationTest(ProviderTestCase):
                     keys = [r[item["primaryKey"]] for r in rows]
                     self.assertEqual(len(keys), len(set(keys)), "主键重复")
                 checked += 1
-        self.assertEqual(12, checked, "B 类数据端点数量变了，请同步 README")
+        self.assertEqual(13, checked, "B 类数据端点数量变了，请同步 README")
 
     def test_cross_host_next_url_is_reachable_when_followed(self):
         """证明「只取到首页」是因为拒绝跟随，而不是那个地址本身不可用"""
@@ -145,6 +145,55 @@ class PaginationTest(ProviderTestCase):
         second = request(item["url"], query={"page": "1", "page_size": "5"}).json
         self.assertEqual(first, second)
         self.assertEqual(item["sampleFirst3"], first["data"]["items"][:3])
+
+
+class NextLinkOnlyTest(ProviderTestCase):
+    """只能跟随 next 完整地址翻页的接口"""
+
+    def _item(self):
+        return self.endpoint("next-link-only", "/records")
+
+    def test_follow_next_links_through_all_pages(self):
+        item = self._item()
+        self.assertEqual("UNSUPPORTED", item["expectedBackendSupport"])
+        self.assertEqual(("NEXT_URL", "next"), (item["paginationType"], item["pagination"]["nextUrlPath"]))
+        url, sizes, ids = item["url"], [], []
+        while url:
+            resp = request(url)
+            self.assertEqual(200, resp.status, resp.text[:200])
+            self.assertEqual({"data", "next"}, set(resp.json))
+            sizes.append(len(resp.json["data"]))
+            ids += [r["id"] for r in resp.json["data"]]
+            url = resp.json["next"]
+            if url:
+                self.assertTrue(url.startswith(item["url"] + "?"), url)
+        self.assertEqual([10, 10, 10, 5], sizes)
+        self.assertEqual(item["pageCount"], len(sizes))
+        self.assertEqual(35, item["expectedTotal"])
+        self.assertEqual(35, len(set(ids)))
+
+    def test_pagination_params_are_rejected(self):
+        item = self._item()
+        for name in ("page", "page_size", "size", "offset", "limit", "cursor"):
+            with self.subTest(param=name):
+                resp = request(item["url"], query={name: "1"})
+                self.assertEqual(400, resp.status)
+                self.assertEqual(400, resp.json["code"])
+                self.assertIn("next", resp.json["message"])
+                self.assertIn(name, resp.json["message"])
+        # 自己构造的续传标记也不认
+        for mark in ("20", "nlo-x", "nlo--5"):
+            self.assertEqual(400, request(item["url"], query={"_next": mark}).status, mark)
+
+    def test_doc_declares_no_parameters(self):
+        doc = request(self.catalog()["next-link-only"]["openapiUrl"]).json
+        self.assertEqual({"/records"}, set(doc["paths"]))
+        operation = doc["paths"]["/records"]["get"]
+        self.assertNotIn("parameters", operation)
+        self.assertNotIn("parameters", doc["paths"]["/records"])
+        self.assertIn("只能使用响应里 next 给出的完整地址翻页", operation["description"])
+        self.assertIn("不接受 page / offset / cursor", operation["description"])
+        self.assertNotIn("_next", operation["description"])
 
 
 if __name__ == "__main__":

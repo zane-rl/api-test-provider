@@ -15,7 +15,7 @@ servers:
   - url: http://127.0.0.1:18090
 tags:
   - name: apikey-header
-    description: API Key（请求头）（A 鉴权）：API_KEY in=header；另提供 Swagger 2.0 文档
+    description: API Key（请求头）（A 鉴权）：API_KEY in=header
     x-auth:
       type: apiKey
       credentials:

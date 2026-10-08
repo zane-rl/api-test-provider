@@ -15,6 +15,7 @@ from .common import (
     api_key_req, extra_param_req, bearer_static_req, basic_req, dynamic_token_req,
     build_dataset, json_resp, error_resp, issue_token,
     qp, hp, json_body, form_body,
+    require_media_type, JSON_MEDIA_TYPE, FORM_MEDIA_TYPE,
 )
 
 # ==================== 测试凭证（全部是明显的假值） ====================
@@ -24,6 +25,7 @@ API_KEY = "test-key-123"
 BASIC_USER, BASIC_PASS = "test", "test-pass"
 LOGIN_USER, LOGIN_PASS = "test", "test-pass"
 CLIENT_ID, CLIENT_SECRET = "test-client", "test-secret"
+APP_KEY, APP_SECRET = "test-client", "test-secret"      # token-json-body / token-form-body 取 Token 用
 EXTRA_APP_KEY = "extra-key-1"
 FIXED_APP_ID, FIXED_SIGN, FIXED_TENANT = "app-001", "test-sign", "t-001"
 
@@ -344,6 +346,82 @@ def _paged_oauth2_scenario(name, title, covers, max_uses_key=None, ttl_key=None,
     return Scenario(name, title, covers, [token_ep, items_ep], auth=auth)
 
 
+# ---- 自定义取 Token 接口：只认一种请求体类型，Token 字段路径不是常见的 access_token ----
+
+TOKEN_BODY_EXPIRES_IN = 7200
+
+
+def _token_body_scenario(name, media_type, title, covers):
+    """Bearer「调用接口获取 Token」的两种请求体形态。
+
+    media_type=application/json：只收 JSON，Token 在嵌套路径 data.token.value；
+    media_type=application/x-www-form-urlencoded：只收表单，Token 在顶层 tokenValue。
+    用另一种类型提交一律 415；业务接口 /items 用 Authorization: Bearer 校验。
+    """
+    is_json = media_type == JSON_MEDIA_TYPE
+    token_path = "data.token.value" if is_json else "tokenValue"
+    expires_path = "data.token.expiresIn" if is_json else "expiresIn"
+    credentials = {"appKey": APP_KEY, "appSecret": APP_SECRET}
+
+    def wrap(token):
+        if is_json:
+            return {"code": 0, "message": "ok",
+                    "data": {"token": {"value": token, "expiresIn": TOKEN_BODY_EXPIRES_IN,
+                                       "type": "Bearer"}}}
+        return {"tokenValue": token, "expiresIn": TOKEN_BODY_EXPIRES_IN, "tokenType": "Bearer"}
+
+    def handler(ctx):
+        require_media_type(ctx, media_type)
+        body = ctx.json_body_or_400() if is_json else ctx.form
+        if not isinstance(body, dict):
+            raise ApiError(400, "请求体必须是 JSON 对象")
+        if body.get("appKey") != APP_KEY or body.get("appSecret") != APP_SECRET:
+            return error_resp(401, "取 Token 失败：appKey 或 appSecret 错误")
+        return json_resp(wrap(issue_token(name)))
+
+    how = ("Token 获取地址：POST {base}/auth/token，请求体类型 %s，字段 appKey=%s、appSecret=%s；"
+           "Token 字段路径 %s，有效期（秒）字段路径 %s；"
+           "业务接口放在请求头 Authorization，带前缀 Bearer"
+           % (media_type, APP_KEY, APP_SECRET, token_path, expires_path))
+    body_schema = {"type": "object", "required": ["appKey", "appSecret"],
+                   "properties": {"appKey": {"type": "string"}, "appSecret": {"type": "string"}}}
+    str_field, int_field = {"type": "string"}, {"type": "integer"}
+    if is_json:
+        response_schema = {"type": "object", "properties": {
+            "code": int_field, "message": str_field,
+            "data": {"type": "object", "properties": {
+                "token": {"type": "object", "properties": {
+                    "value": str_field, "expiresIn": int_field, "type": str_field}}}}}}
+    else:
+        response_schema = {"type": "object", "properties": {
+            "tokenValue": str_field, "expiresIn": int_field, "tokenType": str_field}}
+
+    token_ep = Endpoint(
+        "POST", "/auth/token", handler,
+        operation_id="issueAccessToken", summary="签发访问 Token（写操作，不要勾选为数据接口）",
+        description="只接受 %s 请求体，用其它 Content-Type 提交返回 415；appKey / appSecret 错误返回 401。"
+                    "Token 在响应的 %s，有效期（秒）在 %s" % (media_type, token_path, expires_path),
+        role="TOKEN", auth=False,
+        request_body=(json_body if is_json else form_body)(body_schema, credentials),
+        doc_sample=None, response_schema=response_schema,
+        response_example=wrap("tok-%s-1" % name),
+    )
+    auth = AuthSpec(
+        kind="bearer",
+        requirements=[dynamic_token_req(
+            name, "header", "Authorization", prefix="Bearer",
+            scheme={"type": "http", "scheme": "bearer", "description": how},
+            note="注入到 HEADER Authorization，带前缀 Bearer")],
+        flow={"kind": "REQUEST_TOKEN", "method": "POST", "urlPath": "/auth/token",
+              "contentType": media_type, "requestBody": credentials,
+              "tokenPath": token_path, "expiresInPath": expires_path,
+              "expiresInSeconds": TOKEN_BODY_EXPIRES_IN,
+              "inject": {"in": "HEADER", "name": "Authorization", "prefix": "Bearer"}},
+    )
+    return Scenario(name, title, covers, [token_ep, _items_endpoint(_dataset_for(name))],
+                    auth=auth, description="%s。%s" % (title, how))
+
+
 def _forbidden_scenario():
     name = "forbidden"
     rows = _dataset_for(name)
@@ -381,11 +459,8 @@ def build_scenarios():
         _bearer_request_scenario("bearer-request-query", "query", "access_token", None,
                                  "Bearer 调接口取令牌（Query）",
                                  "tokenSource=REQUEST，令牌注入 Query"),
-        Scenario("apikey-header", "API Key（请求头）", "API_KEY in=header；另提供 Swagger 2.0 文档",
-                 [_items_endpoint(_dataset_for("apikey-header"))],
-                 auth=AuthSpec(kind="apiKey",
-                               requirements=[api_key_req("header", "X-Api-Key", API_KEY)]),
-                 swagger2=True),
+        _simple("apikey-header", "API Key（请求头）", "API_KEY in=header",
+                AuthSpec(kind="apiKey", requirements=[api_key_req("header", "X-Api-Key", API_KEY)])),
         _simple("apikey-query", "API Key（Query）", "API_KEY in=query",
                 AuthSpec(kind="apiKey", requirements=[api_key_req("query", "api_key", API_KEY)])),
         _simple("apikey-cookie", "API Key（Cookie）", "API_KEY in=cookie",
@@ -462,5 +537,11 @@ def build_scenarios():
                     extra_param_req("query", "sign", FIXED_SIGN),
                 ])),
         _forbidden_scenario(),
+        _token_body_scenario("token-json-body", JSON_MEDIA_TYPE,
+                             "Bearer 取 Token（JSON 请求体，Token 在嵌套路径）",
+                             "取 Token 接口只收 application/json；Token 路径 data.token.value 且带有效期字段"),
+        _token_body_scenario("token-form-body", FORM_MEDIA_TYPE,
+                             "Bearer 取 Token（表单请求体，Token 字段名非 access_token）",
+                             "取 Token 接口只收 application/x-www-form-urlencoded；Token 在顶层 tokenValue"),
     ]
     return scenarios

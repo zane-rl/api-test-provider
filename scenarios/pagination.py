@@ -145,7 +145,7 @@ def _scenario_page_number():
                  note="带 page_size 会返回 400"),
     ]
     return Scenario("page-number", "页码分页", "PAGE_NUMBER × QUERY；startFrom 1/0；不配每页数量靠空页结束",
-                    endpoints, auth=NO_AUTH, swagger2=True)
+                    endpoints, auth=NO_AUTH)
 
 
 # ==================== offset：偏移分页、记录无主键 ====================
@@ -369,6 +369,63 @@ def _scenario_body_page():
                     [ep], auth=NO_AUTH)
 
 
+# ==================== next-link-only：只能跟随 next 完整地址翻页 ====================
+
+NLO_ROWS = build_dataset("NLO", 35)
+NLO_PAGE_SIZE = 10
+# 带了这些常见分页参数一律 400：让「后端擅自拼分页参数」可见，而不是静默忽略
+NLO_REJECTED_PARAMS = ("page", "page_size", "size", "offset", "limit", "cursor")
+
+
+def _nlo_offset(mark):
+    """解析 next 地址里的不透明续传标记（形如 nlo-10）；它不进文档，调用方不应自己构造"""
+    if mark in (None, ""):
+        return 0
+    try:
+        if not mark.startswith("nlo-"):
+            raise ValueError(mark)
+        offset = int(mark[4:])
+    except ValueError:
+        raise ApiError(400, "续传标记无效：%r，请原样使用响应里 next 给出的完整地址" % mark)
+    if offset < 0:
+        raise ApiError(400, "续传标记无效：%r，请原样使用响应里 next 给出的完整地址" % mark)
+    return offset
+
+
+def _scenario_next_link_only():
+    def handler(ctx):
+        for name in NLO_REJECTED_PARAMS:
+            if name in ctx.query:
+                raise ApiError(400, "本接口只支持 next 链接翻页，不接受分页参数 %s" % name)
+        offset = _nlo_offset(ctx.query.get("_next"))
+        chunk = NLO_ROWS[offset:offset + NLO_PAGE_SIZE]
+        nxt = None
+        if offset + NLO_PAGE_SIZE < len(NLO_ROWS):
+            nxt = "%s/records?_next=nlo-%d" % (ctx.base_url, offset + NLO_PAGE_SIZE)
+        return json_resp({"data": chunk, "next": nxt})
+
+    pages = -(-len(NLO_ROWS) // NLO_PAGE_SIZE)
+    ep = Endpoint(
+        "GET", "/records", handler,
+        operation_id="listNextLinkOnlyRecords", summary="查询记录列表（只能用 next 链接翻页）",
+        description="共 %d 条，每页固定 %d 条，共 %d 页。**只能使用响应里 next 给出的完整地址翻页**："
+                    "首页不带任何参数，之后原样请求 next，末页 next 为 null。"
+                    "本接口不接受 page / offset / cursor 等任何分页参数（带了返回 400）"
+                    % (len(NLO_ROWS), NLO_PAGE_SIZE, pages),
+        # 刻意不声明任何参数：续传标记只出现在 next 地址里
+        record_path="data", primary_key="id", dataset=lambda: list(NLO_ROWS),
+        pagination={"type": "NEXT_URL", "nextUrlPath": "next", "pageSize": NLO_PAGE_SIZE,
+                    "nextUrlStyle": "ABSOLUTE_SAME_ORIGIN"},
+        doc_sample={},
+        note="只支持 next 完整地址翻页：后端应标记为不支持；带 %s 任一参数返回 400"
+             % " / ".join(NLO_REJECTED_PARAMS),
+        extra_catalog={"expectedBackendSupport": "UNSUPPORTED", "pageCount": pages},
+    )
+    return Scenario("next-link-only", "只支持 next 链接分页",
+                    "只能跟随响应里 next 完整地址翻页、无任何分页参数 → 应标记为不支持",
+                    [ep], auth=NO_AUTH)
+
+
 def build_scenarios():
     return [
         _scenario_root_array(),
@@ -379,4 +436,5 @@ def build_scenarios():
         _scenario_cursor_body(),
         _scenario_next_url(),
         _scenario_body_page(),
+        _scenario_next_link_only(),
     ]

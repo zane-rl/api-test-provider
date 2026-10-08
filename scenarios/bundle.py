@@ -6,6 +6,8 @@
 - 路径加场景前缀：`/items` → `/s/<场景>/items`，`servers` 改为服务根地址；
 - securitySchemes 按场景改名 `<场景>.<原名>`（各场景的同名 scheme 配置不同），
   顶层 security 下放到每个 operation；令牌 / 登录端点保持 `security: []`；
+- components.parameters（公共参数）同样改名 `<场景>.<原名>`，引用它的 `$ref` 跟着改、**不内联**，
+  路径项级的 parameters 原样保留在路径项上；
 - operationId 加场景前缀保证全文唯一，原值留在 `x-original-operation-id`；
 - 每个场景一个 tag，tag 的 `x-auth` 给出测试凭证与令牌流程（同 `/__admin/scenarios`）；
   每个 operation 的 `x-test` 给出角色、分页、记录路径、主键、期望条数。
@@ -15,7 +17,7 @@ import copy
 from collections import OrderedDict
 
 from . import REGISTRY
-from .openapi import ERROR_SCHEMA, build_openapi
+from .openapi import ERROR_SCHEMA, HTTP_METHODS, build_openapi
 
 ALL = "all"
 
@@ -57,6 +59,21 @@ def _test_meta(endpoint, scenario_base):
     return item
 
 
+PARAM_REF_PREFIX = "#/components/parameters/"
+
+
+def rename_param_refs(parameters, scenario_name):
+    """把参数列表里指向公共参数的 $ref 改成合并文档里的名字 `<场景>.<原名>`"""
+    out = []
+    for param in parameters:
+        ref = param.get("$ref", "")
+        if ref.startswith(PARAM_REF_PREFIX):
+            param = {"$ref": "%s%s.%s" % (PARAM_REF_PREFIX, scenario_name,
+                                          ref[len(PARAM_REF_PREFIX):])}
+        out.append(param)
+    return out
+
+
 def build_bundle(kind, root_base):
     """合并 kind 类鉴权的全部场景；kind 为 "all" 时合并全部场景"""
     scenarios = scenarios_of(kind)
@@ -65,6 +82,7 @@ def build_bundle(kind, root_base):
 
     paths = OrderedDict()
     schemes = OrderedDict()
+    shared_params = OrderedDict()
     tags = []
     for scenario in scenarios:
         scenario_base = "%s/s/%s" % (root_base, scenario.name)
@@ -75,6 +93,8 @@ def build_bundle(kind, root_base):
             renamed[name] = "%s.%s" % (scenario.name, name)
             schemes[renamed[name]] = scheme
         security = [{renamed[k]: v for k, v in req.items()} for req in doc.get("security", [])]
+        for name, param in doc.get("components", {}).get("parameters", {}).items():
+            shared_params["%s.%s" % (scenario.name, name)] = param
 
         tags.append({
             "name": scenario.name,
@@ -88,7 +108,14 @@ def build_bundle(kind, root_base):
         for path, operations in doc["paths"].items():
             target = paths.setdefault("/s/%s%s" % (scenario.name, path), OrderedDict())
             for method, op in operations.items():
+                if method not in HTTP_METHODS:
+                    # 路径项级 parameters：留在路径项上，只改引用名
+                    target[method] = (rename_param_refs(op, scenario.name)
+                                      if method == "parameters" else op)
+                    continue
                 endpoint = endpoints[(path, method)]
+                if "parameters" in op:
+                    op["parameters"] = rename_param_refs(op["parameters"], scenario.name)
                 op["x-original-operation-id"] = op["operationId"]
                 op["operationId"] = "%s_%s" % (_camel(scenario.name), op["operationId"])
                 op["tags"] = [scenario.name]
@@ -103,7 +130,7 @@ def build_bundle(kind, root_base):
         title, intro = "全部场景", "全部鉴权类型的场景合在一份文档里"
     else:
         title, intro = KIND_TITLES.get(kind, (kind, ""))
-    endpoint_count = sum(len(ops) for ops in paths.values())
+    endpoint_count = sum(1 for ops in paths.values() for m in ops if m in HTTP_METHODS)
     description = "\n".join([
         "按鉴权类型合并的测试接口文档：%s（%d 个场景 / %d 个端点）。" % (intro, len(scenarios), endpoint_count),
         "",
@@ -125,6 +152,8 @@ def build_bundle(kind, root_base):
         ("paths", paths),
         ("components", {"schemas": {"Error": copy.deepcopy(ERROR_SCHEMA)}}),
     ])
+    if shared_params:
+        bundle["components"]["parameters"] = shared_params
     if schemes:
         bundle["components"]["securitySchemes"] = schemes
     bundle["x-auth-type"] = kind

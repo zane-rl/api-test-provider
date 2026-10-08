@@ -2,6 +2,7 @@
 """A 类鉴权场景自测：正确凭证 200、缺凭证 401、凭证放错位置 401，以及各场景的专有语义。"""
 
 import base64
+import json
 import time
 import unittest
 from urllib.parse import urlencode
@@ -36,7 +37,7 @@ class AuthScenarioTest(ProviderTestCase):
 
     def test_correct_credentials_return_all_items(self):
         scenarios = self._auth_scenarios()
-        self.assertEqual(21, len(scenarios), "A 类场景数量变了，请同步 README")
+        self.assertEqual(23, len(scenarios), "A 类场景数量变了，请同步 README")
         for entry in scenarios:
             with self.subTest(scenario=entry["name"]):
                 items = self._items(entry)
@@ -337,6 +338,99 @@ def _remove(auth, location, name):
         auth.query.pop(name, None)
     else:
         auth.cookies.pop(name, None)
+
+
+class TokenBodyTest(ProviderTestCase):
+    """取 Token 接口只认一种请求体类型，Token 字段路径不是 access_token"""
+
+    JSON = "application/json"
+    FORM = "application/x-www-form-urlencoded"
+    CREDS = {"appKey": "test-client", "appSecret": "test-secret"}
+
+    def _post(self, name, content_type, raw):
+        flow = self.scenario(name)["auth"]["tokenFlow"]
+        headers = {"Content-Type": content_type} if content_type else {}
+        return request(flow["url"], method="POST", headers=headers, body=raw)
+
+    def test_json_token_endpoint(self):
+        name = "token-json-body"
+        flow = self.scenario(name)["auth"]["tokenFlow"]
+        self.assertEqual((self.JSON, "data.token.value", "data.token.expiresIn", self.CREDS),
+                         (flow["contentType"], flow["tokenPath"], flow["expiresInPath"],
+                          flow["requestBody"]))
+        self.assertTrue(flow["url"].endswith("/s/token-json-body/auth/token"))
+        resp = self._post(name, self.JSON + "; charset=utf-8", json.dumps(self.CREDS))
+        self.assertEqual(200, resp.status, resp.text)
+        self.assertEqual({"code": 0, "message": "ok", "data": {"token": {
+            "value": "tok-token-json-body-1", "expiresIn": 7200, "type": "Bearer"}}}, resp.json)
+        self.assertNotIn("access_token", resp.text)
+        # 表单或其它类型一律 415（urllib 对无类型的请求体会自动补表单类型，所以不单测「不带」）
+        for content_type in (self.FORM, "text/plain"):
+            with self.subTest(content_type=content_type):
+                resp = self._post(name, content_type, urlencode(self.CREDS))
+                self.assertEqual(415, resp.status, resp.text)
+                self.assertEqual(415, resp.json["code"])
+                self.assertIn("application/json", resp.json["message"])
+        self.assertEqual(400, self._post(name, self.JSON, "{not json").status)
+        self.assertEqual(401, self._post(name, self.JSON, json.dumps(
+            dict(self.CREDS, appSecret="wrong"))).status)
+
+    def test_form_token_endpoint(self):
+        name = "token-form-body"
+        flow = self.scenario(name)["auth"]["tokenFlow"]
+        self.assertEqual((self.FORM, "tokenValue", "expiresIn"),
+                         (flow["contentType"], flow["tokenPath"], flow["expiresInPath"]))
+        resp = self._post(name, self.FORM, urlencode(self.CREDS))
+        self.assertEqual(200, resp.status, resp.text)
+        self.assertEqual({"tokenValue": "tok-token-form-body-1", "expiresIn": 7200,
+                          "tokenType": "Bearer"}, resp.json)
+        for content_type in (self.JSON, "text/plain"):
+            with self.subTest(content_type=content_type):
+                resp = self._post(name, content_type, json.dumps(self.CREDS))
+                self.assertEqual(415, resp.status, resp.text)
+                self.assertIn(self.FORM, resp.json["message"])
+        self.assertEqual(401, self._post(name, self.FORM, "appKey=test-client&appSecret=x").status)
+
+    def test_business_endpoint_checks_bearer(self):
+        for name in ("token-json-body", "token-form-body"):
+            with self.subTest(scenario=name):
+                entry = self.scenario(name)
+                url = entry["baseUrl"] + "/items"
+                token = obtain_token(entry["baseUrl"], entry["auth"]["tokenFlow"])
+                self.assertEqual("tok-%s-1" % name, token)
+                resp = request(url, headers={"Authorization": "Bearer " + token})
+                self.assertEqual(200, resp.status)
+                self.assertEqual(20, len(resp.json["data"]["items"]))
+                self.assertEqual(401, request(url).status)
+                self.assertEqual(401, request(url, headers={"Authorization": token}).status)
+                self.assertEqual(401, request(url, headers={"Authorization": "Bearer nope"}).status)
+                roles = {i["path"]: i["role"] for i in entry["endpoints"]}
+                self.assertEqual({"/auth/token": "TOKEN", "/items": "DATA"}, roles)
+
+    def test_doc_declares_bearer_and_token_location(self):
+        expect = {"token-json-body": (self.JSON, "data.token.value", "data.token.expiresIn"),
+                  "token-form-body": (self.FORM, "tokenValue", "expiresIn")}
+        for name, (media_type, token_path, expires_path) in expect.items():
+            with self.subTest(scenario=name):
+                entry = self.scenario(name)
+                doc = request(entry["openapiUrl"]).json
+                (scheme,) = doc["components"]["securitySchemes"].values()
+                self.assertEqual(("http", "bearer"), (scheme["type"], scheme["scheme"]))
+                for text in (scheme["description"], doc["info"]["description"]):
+                    self.assertIn(entry["baseUrl"] + "/auth/token", text)
+                    self.assertIn(token_path, text)
+                    self.assertIn(expires_path, text)
+                    self.assertIn(media_type, text)
+                    self.assertNotIn("{base}", text)
+                token_op = doc["paths"]["/auth/token"]["post"]
+                self.assertEqual([media_type], list(token_op["requestBody"]["content"]))
+                self.assertEqual([], token_op["security"])
+                self.assertIn(token_path, token_op["description"])
+                # 响应 schema 按 Token 路径逐层可达
+                schema = token_op["responses"]["200"]["content"]["application/json"]["schema"]
+                for part in token_path.split("."):
+                    schema = schema["properties"][part]
+                self.assertEqual("string", schema["type"])
 
 
 if __name__ == "__main__":

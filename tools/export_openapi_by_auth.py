@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""按鉴权类型导出合并的 OpenAPI YAML 与汇总说明，写进仓库的 `openapi/` 目录。
+"""按鉴权类型导出合并的 OpenAPI 文档与汇总说明，写进仓库的 `openapi/` 目录。
 
-    python3 tools/export_openapi_by_auth.py            # 生成 / 覆盖 openapi/*.yaml 与 openapi/README.md
+每种鉴权类型出 `.yaml` / `.yml` / `.json` 三个文件，由**同一个文档对象**序列化而来
+（`.yaml` 与 `.yml` 除文件头注释里的文件名外逐字节相同），不存在三份各自维护的问题。
+
+    python3 tools/export_openapi_by_auth.py            # 生成 / 覆盖 openapi/*.{yaml,yml,json} 与 openapi/README.md
     python3 tools/export_openapi_by_auth.py --check    # 只比对，不一致返回 1（CI / 自测用）
 
 生成物的 servers 固定为 http://127.0.0.1:18090；换端口启动时请改用服务在线提供的
@@ -19,15 +22,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
-from dump_scenario_table import auth_cell, pagination_cell  # noqa: E402
+from dump_scenario_table import auth_cell, pagination_cell, record_path_cell  # noqa: E402
 from scenarios import REGISTRY  # noqa: E402
+from scenarios import negative  # noqa: E402
+from scenarios.common import FORM_MEDIA_TYPE  # noqa: E402
 from scenarios.bundle import ALL, KIND_TITLES, auth_kinds, build_bundle, scenarios_of  # noqa: E402
 from scenarios.yamlout import dump as yaml_dump  # noqa: E402
 
 BASE = "http://127.0.0.1:18090"
 OUT_DIR = os.path.join(ROOT, "openapi")
 YAML_HEADER = ("# 由 tools/export_openapi_by_auth.py 生成，勿手改。\n"
-               "# servers 固定为 %s；换端口时改用服务在线提供的 /openapi/%s.yaml\n")
+               "# servers 固定为 %s；换端口时改用服务在线提供的 /openapi/%s.%s\n")
+YAML_EXTENSIONS = ("yaml", "yml")
 
 
 # ==================== curl 示例 ====================
@@ -41,7 +47,11 @@ def _token_step(flow, scenario_base):
     url = "$B" + flow["url"][len(BASE):]
     pick = "".join("[%s]" % json.dumps(p) for p in flow["tokenPath"].split("."))
     parse = "python3 -c %s" % _q("import sys,json;print(json.load(sys.stdin)%s)" % pick)
-    if flow["kind"] == "REQUEST_TOKEN":
+    if flow["kind"] == "REQUEST_TOKEN" and flow.get("contentType") == FORM_MEDIA_TYPE:
+        # curl -d 默认就是 application/x-www-form-urlencoded
+        cmd = "curl -s -X POST \"%s\"" % url
+        cmd += "".join(" -d %s=%s" % kv for kv in flow["requestBody"].items())
+    elif flow["kind"] == "REQUEST_TOKEN":
         body = json.dumps(flow["requestBody"], ensure_ascii=False)
         cmd = "curl -s -X POST \"%s\" -H 'Content-Type: application/json' -d %s" % (url, _q(body))
     else:
@@ -106,9 +116,14 @@ def render_readme(kinds):
     w("")
     w("> 由 `tools/export_openapi_by_auth.py` 生成，**勿手改**；改了场景后重跑该脚本。")
     w("")
-    w("本目录把测试 API 提供服务的 %d 个场景 / %d 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 YAML，"
+    w("本目录把测试 API 提供服务的 %d 个场景 / %d 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 文档，"
       "供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，"
-      "与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`）。" % (len(REGISTRY), total_eps))
+      "与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`，另有 `.yaml` / `.yml`）。"
+      % (len(REGISTRY), total_eps))
+    w("")
+    w("每份文档都提供 `.yaml` / `.yml` / `.json` 三种扩展名，内容等价：三个文件由同一个文档对象序列化而来，"
+      "不是分别维护的。全部文档都是 OpenAPI 3.0.3；**不提供** Swagger 2.0 与 OpenAPI 3.1 的正常文档，"
+      "这两种版本只有「应被拒绝」的反例（见文末）。")
     w("")
     w("## 文件一览")
     w("")
@@ -118,9 +133,10 @@ def render_readme(kinds):
         scenarios = scenarios_of(kind)
         c = _endpoint_counts(scenarios)
         desc = "全部鉴权类型" if kind == ALL else KIND_TITLES.get(kind, (kind, ""))[1]
-        w("| `%s` %s | %s | [`%s.yaml`](%s.yaml) | `%s/openapi/%s.yaml` | %d | %d / %d / %d |" % (
-            kind, _kind_title(kind), desc, kind, kind, BASE, kind, len(scenarios),
-            c["DATA"], c["TOKEN"], c["FAULT"]))
+        w("| `%s` %s | %s | [`%s.yaml`](%s.yaml) · [`.yml`](%s.yml) · [`.json`](%s.json) "
+          "| `%s/openapi/%s.<yaml\\|yml\\|json>` | %d | %d / %d / %d |" % (
+              kind, _kind_title(kind), desc, kind, kind, kind, kind, BASE, kind, len(scenarios),
+              c["DATA"], c["TOKEN"], c["FAULT"]))
     w("")
     w("## 本地启动与获取文档")
     w("")
@@ -130,7 +146,9 @@ def render_readme(kinds):
     w("")
     w("curl -s %s/health                                # {\"status\":\"ok\"}" % BASE)
     w("curl -s %s/openapi/bearer.yaml                   # 某类鉴权的合并文档（YAML）" % BASE)
+    w("curl -s %s/openapi/bearer.yml                    # 同上，.yml 扩展名（内容与 .yaml 相同）" % BASE)
     w("curl -s %s/openapi/bearer.json                   # 同一份文档的 JSON 版" % BASE)
+    w("curl -s %s/s/page-number/openapi.yaml            # 单场景文档，同样有 .yaml / .yml / .json" % BASE)
     w("curl -s %s/__admin/scenarios | python3 -m json.tool   # 清单，openapiBundles 列出全部合并文档地址" % BASE)
     w("```")
     w("")
@@ -148,6 +166,8 @@ def render_readme(kinds):
       "`extraAuthParams`（附加鉴权参数）、`tokenFlow`（取令牌方式、令牌路径、注入位置） |")
     w("| `tags[].x-openapi-url` | 该场景的单场景文档地址 |")
     w("| `components.securitySchemes` | 按场景改名为 `<场景>.<原名>`（不同场景的同名 scheme 配置不同） |")
+    w("| `components.parameters` | 场景的公共参数，同样改名为 `<场景>.<原名>`；引用处保留 `$ref`（不内联），"
+      "可能出现在操作级 `paths.*.*.parameters`，也可能出现在路径项级 `paths.*.parameters` |")
     w("| `paths.*.*.security` | 该接口要用的 scheme；`[]` 表示不需要鉴权（登录 / 令牌接口） |")
     w("| `paths.*.*.operationId` | `<场景驼峰>_<原 operationId>`，全文唯一；原值在 `x-original-operation-id` |")
     w("| `paths.*.*.x-scenario` / `x-auth-type` | 所属场景 / 鉴权类型 |")
@@ -189,8 +209,7 @@ def render_readme(kinds):
                     endpoint.method, scenario.name, endpoint.path, catalog["role"],
                     auth_cell(scenario, base) if first else "",
                     pagination_cell(catalog),
-                    "根数组（空串）" if catalog["recordPath"] == "" else (
-                        "`%s`" % catalog["recordPath"] if catalog["recordPath"] else "—"),
+                    record_path_cell(catalog),
                     "`%s`" % catalog["primaryKey"] if catalog["primaryKey"] else "无",
                     "—" if total is None else total))
         if kind == "none":
@@ -205,6 +224,22 @@ def render_readme(kinds):
             w(curl_example(scenario))
         w("```")
     w("")
+    w("## 反例文档（应被拒绝的文档版本）")
+    w("")
+    w("产品口径只支持 OpenAPI 3.0.x。下面两份文档版本不在支持范围内，**期望后端拒绝导入**"
+      "（清单里 `expectedBackendSupport = REJECTED`）。它们不是正常场景：不计入场景数、不进上面的合并文档，"
+      "只在线提供（地址见 `/__admin/scenarios` 的 `negativeDocuments`）。")
+    w("")
+    w("| 文档 | 版本 | 推荐地址 | 其它扩展名 | 描述的接口 |")
+    w("|---|---|---|---|---|")
+    for item in negative.catalog(BASE, ("json", "yaml", "yml")):
+        others = [u for u in item["urls"].values() if u != item["url"]]
+        w("| `%s` | %s | `%s` | %s | `%s %s`（恒定 %d 条） |" % (
+            item["name"], item["specVersion"], item["url"],
+            " · ".join("`.%s`" % u.rpartition(".")[2] for u in others),
+            item["endpoint"]["method"], item["endpoint"]["url"][len(BASE):],
+            item["endpoint"]["expectedTotal"]))
+    w("")
     return "\n".join(out)
 
 
@@ -215,7 +250,12 @@ def render_all():
     kinds = auth_kinds()
     files = {}
     for kind in kinds + [ALL]:
-        files["%s.yaml" % kind] = (YAML_HEADER % (BASE, kind)) + yaml_dump(build_bundle(kind, BASE))
+        # 三种扩展名出自同一个文档对象，保证内容等价
+        doc = build_bundle(kind, BASE)
+        body = yaml_dump(doc)
+        for ext in YAML_EXTENSIONS:
+            files["%s.%s" % (kind, ext)] = (YAML_HEADER % (BASE, kind, ext)) + body
+        files["%s.json" % kind] = json.dumps(doc, ensure_ascii=False, indent=2) + "\n"
     files["README.md"] = render_readme(kinds)
     return files
 

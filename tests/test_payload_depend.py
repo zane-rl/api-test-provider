@@ -283,5 +283,229 @@ class DependTest(ProviderTestCase):
         self.assertEqual([], payload["data"]["items"])
 
 
+class SharedParamsTest(ProviderTestCase):
+    """公共参数：components.parameters + $ref（操作级 / 路径项级），内联参数不是公共参数"""
+
+    SCENARIO = "shared-params"
+    FULL = {"headers": {"X-Tenant-Id": "t-9"}, "query": {"locale": "en-US", "apiVersion": "3"}}
+
+    def _call(self, path, headers=None, query=None):
+        return request(self.endpoint(self.SCENARIO, path)["url"], headers=headers, query=query)
+
+    def _doc(self):
+        return request(self.catalog()[self.SCENARIO]["openapiUrl"]).json
+
+    def test_doc_defines_three_shared_parameters(self):
+        params = self._doc()["components"]["parameters"]
+        self.assertEqual({"TenantId", "Locale", "ApiVersion"}, set(params))
+        self.assertEqual(("header", "X-Tenant-Id", "string"),
+                         (params["TenantId"]["in"], params["TenantId"]["name"],
+                          params["TenantId"]["schema"]["type"]))
+        self.assertEqual(("query", "locale", ["zh-CN", "en-US"]),
+                         (params["Locale"]["in"], params["Locale"]["name"],
+                          params["Locale"]["schema"]["enum"]))
+        self.assertEqual(("query", "apiVersion", "integer"),
+                         (params["ApiVersion"]["in"], params["ApiVersion"]["name"],
+                          params["ApiVersion"]["schema"]["type"]))
+        for param in params.values():
+            self.assertTrue(param["required"])
+            self.assertFalse({"example", "default"} & (set(param) | set(param["schema"])))
+
+    def test_doc_reference_shapes(self):
+        paths = self._doc()["paths"]
+        ref = lambda name: {"$ref": "#/components/parameters/" + name}
+        all_three = [ref("TenantId"), ref("Locale"), ref("ApiVersion")]
+        inline = lambda path: [p for p in paths[path]["get"].get("parameters", []) if "$ref" not in p]
+        refs = lambda path: [p for p in paths[path]["get"].get("parameters", []) if "$ref" in p]
+
+        # /orders：操作级引用全部，另有内联 keyword
+        self.assertNotIn("parameters", paths["/orders"])
+        self.assertEqual(all_three, refs("/orders"))
+        self.assertEqual(["keyword"], [p["name"] for p in inline("/orders")])
+        # /customers：路径项级引用全部，操作级只有内联 keyword
+        self.assertEqual(all_three, paths["/customers"]["parameters"])
+        self.assertEqual([], refs("/customers"))
+        self.assertEqual(["keyword"], [p["name"] for p in inline("/customers")])
+        # /products：只引用 Locale
+        self.assertNotIn("parameters", paths["/products"])
+        self.assertEqual([ref("Locale")], paths["/products"]["get"]["parameters"])
+        # /warehouses：不引用；内联一个与公共参数同名、但定义不同的 locale
+        self.assertNotIn("parameters", paths["/warehouses"])
+        self.assertEqual([], refs("/warehouses"))
+        (own,) = inline("/warehouses")
+        self.assertEqual(("locale", "query", False), (own["name"], own["in"], own["required"]))
+        self.assertNotIn("enum", own["schema"])
+        # keyword 在两个接口里重复出现，但没有被提成公共参数
+        self.assertNotIn("keyword", [p["name"] for p in self._doc()["components"]["parameters"].values()])
+        self.assertFalse(inline("/orders")[0]["required"])
+
+    def test_catalog_states_reference_location(self):
+        expect = {"/orders": ("operation", 3, ["keyword"]), "/customers": ("pathItem", 3, ["keyword"]),
+                  "/products": ("operation", 1, []), "/warehouses": (None, 0, ["locale"])}
+        for path, (location, ref_count, inline) in expect.items():
+            with self.subTest(path=path):
+                item = self.endpoint(self.SCENARIO, path)
+                shared = item["sharedParameters"]
+                self.assertEqual(location, shared["refLocation"])
+                self.assertEqual(ref_count, len(shared["refs"]))
+                self.assertEqual(inline, [p["name"] for p in shared["inlineParameters"]])
+                self.assertEqual([r["name"] for r in shared["refs"]],
+                                 [v["name"] for v in item["requiredTestValues"]])
+
+    def test_catalog_test_values_reproduce_sample(self):
+        for path in ("/orders", "/customers", "/products", "/warehouses"):
+            with self.subTest(path=path):
+                item = self.endpoint(self.SCENARIO, path)
+                headers = {v["name"]: v["testValue"] for v in item["requiredTestValues"]
+                           if v["in"] == "HEADER"}
+                query = {v["name"]: v["testValue"] for v in item["requiredTestValues"]
+                         if v["in"] == "QUERY"}
+                resp = request(item["url"], headers=headers, query=query)
+                self.assertEqual(200, resp.status, resp.text[:200])
+                rows = records_of(resp.json, item["recordPath"])
+                self.assertEqual(item["expectedTotal"], len(rows))
+                self.assertEqual(item["sampleFirst3"], rows[:3])
+
+    def test_full_references_echo_values(self):
+        for path in ("/orders", "/customers"):
+            with self.subTest(path=path):
+                resp = self._call(path, **self.FULL)
+                self.assertEqual(200, resp.status, resp.text[:200])
+                rows = resp.json["data"]["items"]
+                self.assertEqual(3, len(rows))
+                for row in rows:
+                    self.assertEqual(("t-9", "en-US", 3),
+                                     (row["tenantId"], row["locale"], row["apiVersion"]))
+
+    def test_missing_or_invalid_shared_param_returns_400(self):
+        cases = [
+            ({"headers": {}, "query": self.FULL["query"]}, "X-Tenant-Id"),
+            ({"headers": self.FULL["headers"], "query": {"apiVersion": "3"}}, "locale"),
+            ({"headers": self.FULL["headers"], "query": {"locale": "en-US"}}, "apiVersion"),
+            ({"headers": self.FULL["headers"], "query": {"locale": "fr-FR", "apiVersion": "3"}}, "枚举"),
+            ({"headers": self.FULL["headers"], "query": {"locale": "en-US", "apiVersion": "v3"}}, "整数"),
+        ]
+        for path in ("/orders", "/customers"):
+            for kwargs, keyword in cases:
+                with self.subTest(path=path, expect=keyword):
+                    resp = self._call(path, **kwargs)
+                    self.assertEqual(400, resp.status, resp.text[:200])
+                    self.assertEqual(400, resp.json["code"])
+                    self.assertIn(keyword, resp.json["message"])
+        resp = self._call("/orders", headers=self.FULL["headers"],
+                          query={"locale": "fr-FR", "apiVersion": "3"})
+        self.assertIn("fr-FR", resp.json["message"])
+        self.assertIn("zh-CN / en-US", resp.json["message"])
+
+    def test_partial_reference_only_needs_locale(self):
+        resp = self._call("/products", query={"locale": "zh-CN"})
+        self.assertEqual(200, resp.status)
+        for row in resp.json["data"]["items"]:
+            self.assertEqual((None, "zh-CN", None),
+                             (row["tenantId"], row["locale"], row["apiVersion"]))
+        self.assertEqual(400, self._call("/products").status)
+        self.assertEqual(400, self._call("/products", query={"locale": "ja-JP"}).status)
+
+    def test_inline_locale_is_not_validated_as_shared(self):
+        # 不传、传枚举外的值都 200：它不是公共参数，没有必填与枚举限制
+        for query, expected in (({}, None), ({"locale": "fr-FR"}, "fr-FR"), ({"locale": "zh-CN"}, "zh-CN")):
+            with self.subTest(query=query):
+                resp = self._call("/warehouses", query=query)
+                self.assertEqual(200, resp.status, resp.text[:200])
+                rows = resp.json["data"]["items"]
+                self.assertEqual(3, len(rows))
+                self.assertTrue(all(r["locale"] == expected and r["tenantId"] is None for r in rows))
+
+    def test_inline_keyword_filters_and_is_optional(self):
+        for path, prefix in (("/orders", "SP-ORD"), ("/customers", "SP-CUS")):
+            with self.subTest(path=path):
+                resp = self._call(path, headers=self.FULL["headers"],
+                                  query=dict(self.FULL["query"], keyword="物料2"))
+                self.assertEqual(200, resp.status)
+                self.assertEqual([prefix + "-00002"], [r["id"] for r in resp.json["data"]["items"]])
+        # 没声明 keyword 的接口不受它影响
+        resp = self._call("/products", query={"locale": "zh-CN", "keyword": "物料2"})
+        self.assertEqual(3, len(resp.json["data"]["items"]))
+
+
+class RootObjectRecordTest(ProviderTestCase):
+
+    def test_root_object_is_one_record_with_array_fields(self):
+        item = self.endpoint("root-object-record", "/order")
+        resp = request(item["url"])
+        self.assertEqual(200, resp.status)
+        payload = resp.json
+        self.assertIsInstance(payload, dict)
+        self.assertNotIn("data", payload)
+        self.assertEqual("", item["recordPath"])
+        self.assertEqual(1, item["expectedTotal"])
+        self.assertEqual([payload], records_of(payload, item["recordPath"]))
+        self.assertEqual([payload], item["sampleFirst3"])
+        self.assertEqual("ROOT-ORD-00001", payload[item["primaryKey"]])
+        self.assertEqual({"tags": "SCALAR_ARRAY", "lines": "OBJECT_ARRAY"}, item["arrayFields"])
+        self.assertEqual(["a", "b"], payload["tags"])
+        self.assertEqual(2, len(payload["lines"]))
+        self.assertTrue(all(isinstance(line, dict) for line in payload["lines"]))
+        self.assertIsNone(payload["remark"])
+        self.assertIs(False, payload["urgent"])
+
+    def test_doc_declares_root_object_with_both_array_kinds(self):
+        doc = request(self.catalog()["root-object-record"]["openapiUrl"]).json
+        schema = doc["paths"]["/order"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+        self.assertEqual("object", schema["type"])
+        props = schema["properties"]
+        self.assertEqual({"type": "array", "items": {"type": "string"}}, props["tags"])
+        self.assertEqual("array", props["lines"]["type"])
+        self.assertEqual("object", props["lines"]["items"]["type"])
+        self.assertEqual({"lineNo", "sku", "quantity", "price"},
+                         set(props["lines"]["items"]["properties"]))
+        self.assertEqual("number", props["amount"]["type"])
+        self.assertEqual("boolean", props["urgent"]["type"])
+
+
+class FormBodyPostTest(ProviderTestCase):
+
+    FORM = {"Content-Type": "application/x-www-form-urlencoded"}
+
+    def _item(self):
+        return self.endpoint("form-body-post", "/orders/search", "POST")
+
+    def test_form_submission_returns_rows(self):
+        item = self._item()
+        self.assertEqual("UNSUPPORTED", item["expectedBackendSupport"])
+        resp = request(item["url"], method="POST", headers=self.FORM, body="")
+        self.assertEqual(200, resp.status, resp.text[:200])
+        rows = records_of(resp.json, item["recordPath"])
+        self.assertEqual(item["expectedTotal"], len(rows))
+        self.assertEqual(6, len(rows))
+        resp = request(item["url"], method="POST", body="status=PAID",
+                       headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+        self.assertEqual(200, resp.status)
+        self.assertEqual({"PAID"}, {r["status"] for r in resp.json["data"]["items"]})
+        self.assertEqual(2, len(resp.json["data"]["items"]))
+
+    def test_json_or_missing_content_type_returns_415(self):
+        item = self._item()
+        resp = request(item["url"], method="POST", json_body={"status": "PAID"})
+        self.assertEqual(415, resp.status)
+        self.assertEqual(415, resp.json["code"])
+        self.assertIn("application/x-www-form-urlencoded", resp.json["message"])
+        self.assertEqual(415, request(item["url"], method="POST", body="status=PAID",
+                                      headers={"Content-Type": "text/plain"}).status)
+
+    def test_status_outside_enum_returns_400(self):
+        resp = request(self._item()["url"], method="POST", headers=self.FORM, body="status=LOST")
+        self.assertEqual(400, resp.status)
+        self.assertIn("status", resp.json["message"])
+
+    def test_doc_declares_only_form_request_body(self):
+        doc = request(self.catalog()["form-body-post"]["openapiUrl"]).json
+        body = doc["paths"]["/orders/search"]["post"]["requestBody"]
+        self.assertEqual(["application/x-www-form-urlencoded"], list(body["content"]))
+        props = body["content"]["application/x-www-form-urlencoded"]["schema"]["properties"]
+        self.assertEqual({"keyword", "status"}, set(props))
+        self.assertEqual(["NEW", "PAID", "SHIPPED"], props["status"]["enum"])
+
+
 if __name__ == "__main__":
     unittest.main()

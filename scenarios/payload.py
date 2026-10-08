@@ -3,7 +3,8 @@
 
 覆盖：Query / 请求体原样回显（验证 `+`、中文、空格的编码）、记录路径命中单对象、
 业务成功码的多种写法、一个接口产出多个对象（嵌套数组子表）、
-验证接口带「无来源的必填参数」（路径参数 + required Query）、参数名带点号。
+验证接口带「无来源的必填参数」（路径参数 + required Query）、参数名带点号、
+公共参数（components.parameters + $ref）、根对象作为一条记录、表单请求体的业务 POST。
 """
 
 from datetime import timedelta
@@ -12,7 +13,8 @@ from .auth import API_KEY
 from .common import (
     Endpoint, Scenario, NO_AUTH, AuthSpec, ApiError,
     api_key_req, build_dataset, build_record, iso, BASE_TIME,
-    json_resp, qp, pp, json_body, json_type_of,
+    json_resp, qp, hp, pp, ref_param, json_body, form_body, json_type_of,
+    require_media_type, FORM_MEDIA_TYPE,
 )
 
 
@@ -278,6 +280,223 @@ def _scenario_dotted_param():
                                         requirements=[api_key_req("header", "X-Api-Key", API_KEY)]))
 
 
+# ==================== shared-params：公共参数（components.parameters + $ref） ====================
+
+SP_LOCALES = ["zh-CN", "en-US"]
+# 公共参数的测试值；键是 components.parameters 里的组件名
+SP_TEST_VALUES = {"TenantId": "tenant-001", "Locale": "zh-CN", "ApiVersion": "2"}
+# 组件名 -> (位置, 参数名, 回显到记录里的字段名)
+SP_COMPONENTS = {
+    "TenantId": ("HEADER", "X-Tenant-Id", "tenantId"),
+    "Locale": ("QUERY", "locale", "locale"),
+    "ApiVersion": ("QUERY", "apiVersion", "apiVersion"),
+}
+
+
+def _sp_shared_parameters():
+    """文档 components.parameters 的内容：三个参数都必填，刻意不给 example / default"""
+    locale = qp("locale", "string", required=True, description="语言（公共参数）")
+    locale["schema"]["enum"] = list(SP_LOCALES)
+    return {
+        "TenantId": hp("X-Tenant-Id", "string", required=True, description="租户 ID（公共参数）"),
+        "Locale": locale,
+        "ApiVersion": qp("apiVersion", "integer", required=True,
+                         description="接口版本号（公共参数）"),
+    }
+
+
+def _sp_read(ctx, components):
+    """只校验该端点引用了的公共参数，返回要回显的 {tenantId, locale, apiVersion}（未引用为 None）"""
+    values = {"tenantId": None, "locale": None, "apiVersion": None}
+    if "TenantId" in components:
+        tenant = ctx.header("X-Tenant-Id")
+        if not tenant:
+            raise ApiError(400, "缺少公共参数 X-Tenant-Id（Header）")
+        values["tenantId"] = tenant
+    if "Locale" in components:
+        locale = ctx.query.get("locale")
+        if not locale:
+            raise ApiError(400, "缺少公共参数 locale（Query）")
+        if locale not in SP_LOCALES:
+            raise ApiError(400, "参数 locale 取值不在枚举内：%r，可选 %s"
+                           % (locale, " / ".join(SP_LOCALES)))
+        values["locale"] = locale
+    if "ApiVersion" in components:
+        if not ctx.query.get("apiVersion"):
+            raise ApiError(400, "缺少公共参数 apiVersion（Query）")
+        values["apiVersion"] = ctx.int_query("apiVersion")
+    return values
+
+
+def _sp_endpoint(path, operation_id, summary, description, prefix, components=(),
+                 ref_location=None, keyword=False, inline_locale=False):
+    """一个 shared-params 端点。
+
+    components   ：引用的公共参数（组件名）
+    ref_location ：引用写在哪里——operation（操作级）/ pathItem（路径项级）/ None（不引用）
+    keyword      ：是否内联声明可选的 keyword（多个接口重复出现，但不走公共定义）
+    inline_locale：是否内联声明一个与公共参数同名的 locale（可选、无 enum、不校验）
+    """
+    rows = build_dataset(prefix, 3)
+
+    def records(values, keyword_value=None):
+        return [dict(row, **values) for row in rows
+                if not keyword_value or keyword_value in row["name"]]
+
+    def handler(ctx):
+        values = _sp_read(ctx, components)
+        if inline_locale:
+            values["locale"] = ctx.query.get("locale")      # 自用参数：原样回显，不做任何校验
+        keyword_value = ctx.query.get("keyword") if keyword else None
+        return json_resp({"code": 0, "message": "ok",
+                          "data": {"items": records(values, keyword_value)}})
+
+    refs = [ref_param(name) for name in components]
+    inline = []
+    if keyword:
+        inline.append(qp("keyword", "string",
+                         description="按名称包含过滤，可不传（本接口内联声明，不是公共参数）"))
+    if inline_locale:
+        inline.append(qp("locale", "string",
+                         description="本接口自用的展示语言，任意字符串、可不传；"
+                                     "与公共参数 locale 同名但没有走公共定义，没有枚举限制"))
+
+    sample = {"tenantId": None, "locale": None, "apiVersion": None}
+    sample_query, sample_headers, test_values = {}, {}, []
+    for name in components:
+        where, param_name, field = SP_COMPONENTS[name]
+        value = SP_TEST_VALUES[name]
+        sample[field] = int(value) if name == "ApiVersion" else value
+        (sample_headers if where == "HEADER" else sample_query)[param_name] = value
+        test_values.append({"in": where, "name": param_name, "testValue": value})
+
+    return Endpoint(
+        "GET", path, handler, operation_id=operation_id, summary=summary,
+        description=description,
+        parameters=(refs if ref_location == "operation" else []) + inline,
+        path_parameters=refs if ref_location == "pathItem" else [],
+        record_path="data.items", primary_key="id",
+        dataset=lambda: records(sample),
+        doc_sample={"query": sample_query, "headers": sample_headers},
+        extra_catalog={
+            "requiredTestValues": test_values,
+            "sharedParameters": {
+                "refLocation": ref_location,
+                "refs": [{"component": name, "in": SP_COMPONENTS[name][0],
+                          "name": SP_COMPONENTS[name][1]} for name in components],
+                "inlineParameters": [{"in": "QUERY", "name": p["name"]} for p in inline],
+            },
+        },
+    )
+
+
+def _scenario_shared_params():
+    all_three = ("TenantId", "Locale", "ApiVersion")
+    echo = "每条记录回显收到的 tenantId / locale / apiVersion"
+    endpoints = [
+        _sp_endpoint("/orders", "listSharedParamOrders", "查询订单（操作级引用全部公共参数）",
+                     "在操作级用 $ref 引用全部 3 个公共参数；另内联声明可选的 keyword。"
+                     "公共参数缺失或 locale 不在枚举内返回 400。" + echo,
+                     "SP-ORD", all_three, "operation", keyword=True),
+        _sp_endpoint("/customers", "listSharedParamCustomers", "查询客户（路径项级引用全部公共参数）",
+                     "3 个公共参数写在路径项（path item）的 parameters 里用 $ref 引用，操作级只有内联的 keyword。"
+                     "公共参数缺失或 locale 不在枚举内返回 400。" + echo,
+                     "SP-CUS", all_three, "pathItem", keyword=True),
+        _sp_endpoint("/products", "listSharedParamProducts", "查询商品（只引用公共参数 locale）",
+                     "只引用公共参数 Locale；不需要 X-Tenant-Id 与 apiVersion（记录里这两项恒为 null）。"
+                     "locale 缺失或不在枚举内返回 400",
+                     "SP-PRD", ("Locale",), "operation"),
+        _sp_endpoint("/warehouses", "listSharedParamWarehouses", "查询仓库（不引用任何公共参数）",
+                     "不引用任何公共参数；内联声明的 locale 与公共参数同名，但可选、无枚举、服务端不校验，"
+                     "任意值或不传都返回 200，收到的值原样回显在记录的 locale 里",
+                     "SP-WH", inline_locale=True),
+    ]
+    return Scenario(
+        "shared-params", "公共参数（components.parameters）",
+        "公共参数识别：components.parameters + $ref（操作级 / 路径项级）；"
+        "内联的同名或重复参数不应被当成公共参数",
+        endpoints, auth=NO_AUTH, shared_parameters=_sp_shared_parameters(),
+        description="公共参数定义在 components.parameters：X-Tenant-Id（Header）、locale（Query，枚举 %s）、"
+                    "apiVersion（Query，整数），均必填。/orders 在操作级引用全部，/customers 在路径项级引用全部，"
+                    "/products 只引用 locale，/warehouses 不引用。"
+                    "/orders 与 /customers 各自内联的 keyword、/warehouses 内联的 locale 都不是公共参数"
+                    % " / ".join(SP_LOCALES))
+
+
+# ==================== root-object-record：根对象作为一条记录 ====================
+
+ROOT_ORDER = {
+    "orderNo": "ROOT-ORD-00001",
+    "status": "PAID",
+    "amount": 237.5,
+    "urgent": False,
+    "createdAt": iso(BASE_TIME),
+    "remark": None,
+    "tags": ["a", "b"],
+    "lines": [{"lineNo": j, "sku": "PRD-%05d" % j, "quantity": j + 1,
+               "price": round(9.9 + j * 1.37, 2)} for j in (1, 2)],
+}
+
+
+def _scenario_root_object_record():
+    def handler(ctx):
+        return json_resp(ROOT_ORDER)
+
+    ep = Endpoint(
+        "GET", "/order", handler,
+        operation_id="getRootOrder", summary="查询单个订单（根对象）",
+        description="响应的根就是一个对象，没有 code / data 包裹层；根对象里同时有标量字段、"
+                    "标量数组 tags 与对象数组 lines。应把根对象当作 1 条记录，数组保留为字段",
+        record_path="", primary_key="orderNo", dataset=lambda: [ROOT_ORDER],
+        doc_sample={},
+        note="根对象即一条记录：tags / lines 应保留为该记录的数组字段，不应被展开成多条记录",
+        extra_catalog={"arrayFields": {"tags": "SCALAR_ARRAY", "lines": "OBJECT_ARRAY"}},
+    )
+    return Scenario("root-object-record", "根对象作为一条记录",
+                    "记录路径 = 根对象 → 1 条记录；标量数组与对象数组保留为字段",
+                    [ep], auth=NO_AUTH)
+
+
+# ==================== form-body-post：表单请求体的业务 POST ====================
+
+FBP_STATUSES = ["NEW", "PAID", "SHIPPED"]
+FBP_ROWS = [dict(build_record("FBP", i), status=FBP_STATUSES[i % len(FBP_STATUSES)])
+            for i in range(1, 7)]
+
+
+def _scenario_form_body_post():
+    def handler(ctx):
+        require_media_type(ctx, FORM_MEDIA_TYPE)
+        form = ctx.form
+        status = form.get("status")
+        if status and status not in FBP_STATUSES:
+            raise ApiError(400, "参数 status 取值不在枚举内：%r，可选 %s"
+                           % (status, " / ".join(FBP_STATUSES)))
+        keyword = form.get("keyword")
+        rows = [r for r in FBP_ROWS
+                if (not status or r["status"] == status)
+                and (not keyword or keyword in r["name"])]
+        return json_resp({"code": 0, "message": "ok", "data": {"items": rows}})
+
+    ep = Endpoint(
+        "POST", "/orders/search", handler,
+        operation_id="searchOrdersByForm", summary="按条件查询订单（表单请求体）",
+        description="请求体只接受 %s（字段 keyword / status 均可选，都不传返回全部 %d 条）；"
+                    "用 JSON 或其它 Content-Type 提交返回 415" % (FORM_MEDIA_TYPE, len(FBP_ROWS)),
+        request_body=form_body({"type": "object", "properties": {
+            "keyword": {"type": "string", "description": "按名称包含过滤"},
+            "status": {"type": "string", "enum": list(FBP_STATUSES)}}}),
+        record_path="data.items", primary_key="id", dataset=lambda: list(FBP_ROWS),
+        doc_sample={"body": "", "headers": {"Content-Type": FORM_MEDIA_TYPE}},
+        note="请求体为表单的业务接口：后端应标记为不支持；误用 JSON 提交会收到 415",
+        extra_catalog={"expectedBackendSupport": "UNSUPPORTED",
+                       "requestContentType": FORM_MEDIA_TYPE},
+    )
+    return Scenario("form-body-post", "表单请求体的业务 POST",
+                    "业务接口请求体为 application/x-www-form-urlencoded → 应标记为不支持",
+                    [ep], auth=NO_AUTH)
+
+
 def build_scenarios():
     return [
         _scenario_echo(),
@@ -286,4 +505,7 @@ def build_scenarios():
         _scenario_nested(),
         _scenario_required_business_param(),
         _scenario_dotted_param(),
+        _scenario_shared_params(),
+        _scenario_root_object_record(),
+        _scenario_form_body_post(),
     ]

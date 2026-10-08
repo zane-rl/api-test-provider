@@ -1,0 +1,952 @@
+# 由 tools/export_openapi_by_auth.py 生成，勿手改。
+# servers 固定为 http://127.0.0.1:18090；换端口时改用服务在线提供的 /openapi/apiKey.yml
+openapi: "3.0.3"
+info:
+  title: 测试 API 提供服务 · 鉴权：API Key
+  version: "1.0.0"
+  description: |-
+    按鉴权类型合并的测试接口文档：Header / Query / Cookie 三种位置，含前缀与附加鉴权参数（7 个场景 / 7 个端点）。
+
+    - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
+    - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
+    - x-test.role：DATA 业务接口 / TOKEN 登录与令牌接口（不要当数据接口调）/ FAULT 故障注入。
+    - 每次测试前 POST http://127.0.0.1:18090/__admin/reset?scenario=<场景> 复位，调用后查 http://127.0.0.1:18090/__admin/requests。
+servers:
+  - url: http://127.0.0.1:18090
+tags:
+  - name: apikey-header
+    description: API Key（请求头）（A 鉴权）：API_KEY in=header
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: HEADER
+          name: X-Api-Key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/apikey-header/openapi.json
+  - name: apikey-query
+    description: API Key（Query）（A 鉴权）：API_KEY in=query
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: QUERY
+          name: api_key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/apikey-query/openapi.json
+  - name: apikey-cookie
+    description: API Key（Cookie）（A 鉴权）：API_KEY in=cookie
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: COOKIE
+          name: api_key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/apikey-cookie/openapi.json
+  - name: apikey-header-prefix
+    description: API Key（Authorization 头 + 前缀）（A 鉴权）：API_KEY 放 Authorization 头且带自定义前缀 Token
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: Token test-key-123
+          prefix: Token
+          note: "完整值 `Token test-key-123`，无前缀或前缀不符一律 401"
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/apikey-header-prefix/openapi.json
+  - name: apikey-extra
+    description: API Key + 附加鉴权参数（A 鉴权）：API_KEY 主凭证与附加鉴权参数并存
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: HEADER
+          name: X-API-Key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams:
+        - name: X-App-Key
+          in: HEADER
+          value: extra-key-1
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/apikey-extra/openapi.json
+  - name: required-business-param
+    description: 验证接口带无来源的必填参数（C 请求与响应）：验证连接前检查请求值是否齐全：路径参数与 required Query 无固定值 / 无依赖 / 无测试值时返回 NEEDS_TEST_VALUES 且不发请求
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: HEADER
+          name: X-Api-Key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/required-business-param/openapi.json
+  - name: dotted-param
+    description: 参数名带点号（C 请求与响应）：Query 参数名含点号（filter.name / page.size）时按原名透传，不拆成嵌套对象
+    x-auth:
+      type: apiKey
+      credentials:
+        - in: HEADER
+          name: X-Api-Key
+          testValue: test-key-123
+          prefix: null
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/dotted-param/openapi.json
+paths:
+  /s/apikey-header/items:
+    get:
+      operationId: apikeyHeader_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: APIKEY-HEADER-00001
+                      name: APIKEY-HEADER物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: APIKEY-HEADER-00002
+                      name: APIKEY-HEADER物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - apikey-header
+      security:
+        - apikey-header.apiKeyHeader: []
+      x-scenario: apikey-header
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/apikey-query/items:
+    get:
+      operationId: apikeyQuery_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: APIKEY-QUERY-00001
+                      name: APIKEY-QUERY物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: APIKEY-QUERY-00002
+                      name: APIKEY-QUERY物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - apikey-query
+      security:
+        - apikey-query.apiKeyQuery: []
+      x-scenario: apikey-query
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/apikey-cookie/items:
+    get:
+      operationId: apikeyCookie_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: APIKEY-COOKIE-00001
+                      name: APIKEY-COOKIE物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: APIKEY-COOKIE-00002
+                      name: APIKEY-COOKIE物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - apikey-cookie
+      security:
+        - apikey-cookie.apiKeyCookie: []
+      x-scenario: apikey-cookie
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/apikey-header-prefix/items:
+    get:
+      operationId: apikeyHeaderPrefix_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: APIKEY-HEADER-PREFIX-00001
+                      name: APIKEY-HEADER-PREFIX物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: APIKEY-HEADER-PREFIX-00002
+                      name: APIKEY-HEADER-PREFIX物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - apikey-header-prefix
+      security:
+        - apikey-header-prefix.apiKeyHeader: []
+      x-scenario: apikey-header-prefix
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/apikey-extra/items:
+    get:
+      operationId: apikeyExtra_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: APIKEY-EXTRA-00001
+                      name: APIKEY-EXTRA物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: APIKEY-EXTRA-00002
+                      name: APIKEY-EXTRA物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - apikey-extra
+      security:
+        - apikey-extra.apiKeyHeader: []
+          apikey-extra.extraHeaderXAppKey: []
+      x-scenario: apikey-extra
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  "/s/required-business-param/customers/{customerId}":
+    get:
+      operationId: requiredBusinessParam_getCustomerProfile
+      summary: 查询客户档案（按客户 ID 与租户）
+      description: 路径参数 customerId 与必填 Query 参数 tenant 都没有默认值、也没有样例值，且不来自任何前置接口；缺 tenant 返回 400，customerId 不存在返回 404。可用 customerId：RBP-CUS-00001 ~ RBP-CUS-00005；tenant 任意非空值，原样回显在记录里
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            tenant:
+                              type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: RBP-CUS-00001
+                      name: RBP-CUS物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      tenant: tenant-001
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          description: 客户 ID
+          schema:
+            type: string
+        - name: tenant
+          in: query
+          required: true
+          description: 租户编码
+          schema:
+            type: string
+      x-original-operation-id: getCustomerProfile
+      tags:
+        - required-business-param
+      security:
+        - required-business-param.apiKeyHeader: []
+      x-scenario: required-business-param
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 1
+        requiresAuth: true
+        note: 验证接口必填参数无来源：缺值时后端应返回 NEEDS_TEST_VALUES 且不发请求；若误发请求（不带 tenant）会收到 400
+        pathSample:
+          customerId: RBP-CUS-00001
+        requiredTestValues:
+          - in: PATH
+            name: customerId
+            testValue: RBP-CUS-00001
+          - in: QUERY
+            name: tenant
+            testValue: tenant-001
+  /s/dotted-param/items:
+    get:
+      operationId: dottedParam_listDottedParamItems
+      summary: 查询数据（参数名带点号）
+      description: Query 参数名本身带点号：必填 filter.name、可选整数 page.size，都没有默认值与样例值。缺少或为空的 filter.name 返回 400；page.size 不是正整数返回 400。每条记录把收到的 filter.name 回显在 filterName、page.size 回显在 pageSize（未传为 null）
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                            filterName:
+                              type: string
+                            pageSize:
+                              type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: DOT-00001
+                      name: DOT物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                      filterName: dotted-name-001
+                      pageSize: 20
+                    - id: DOT-00002
+                      name: DOT物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                      filterName: dotted-name-001
+                      pageSize: 20
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: filter.name
+          in: query
+          required: true
+          description: 按名称过滤
+          schema:
+            type: string
+        - name: page.size
+          in: query
+          required: false
+          description: 每页数量（只回显，不影响返回条数）
+          schema:
+            type: integer
+      x-original-operation-id: listDottedParamItems
+      tags:
+        - dotted-param
+      security:
+        - dotted-param.apiKeyHeader: []
+      x-scenario: dotted-param
+      x-auth-type: apiKey
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 3
+        requiresAuth: true
+        note: 参数名带点号：后端不应把 filter.name 拆成嵌套结构；缺 filter.name 会收到 400
+        requiredTestValues:
+          - in: QUERY
+            name: filter.name
+            testValue: dotted-name-001
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+      description: 错误响应体
+  securitySchemes:
+    apikey-header.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: 测试 API Key，固定值 test-key-123
+    apikey-query.apiKeyQuery:
+      type: apiKey
+      in: query
+      name: api_key
+      description: 测试 API Key，固定值 test-key-123
+    apikey-cookie.apiKeyCookie:
+      type: apiKey
+      in: cookie
+      name: api_key
+      description: 测试 API Key，固定值 test-key-123
+    apikey-header-prefix.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "测试 API Key，固定值 test-key-123；值须带前缀 `Token `（完整值：Token test-key-123）"
+    apikey-extra.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: 测试 API Key，固定值 test-key-123
+    apikey-extra.extraHeaderXAppKey:
+      type: apiKey
+      in: header
+      name: X-App-Key
+      description: 测试 API Key，固定值 extra-key-1
+    required-business-param.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: 测试 API Key，固定值 test-key-123
+    dotted-param.apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: 测试 API Key，固定值 test-key-123
+x-auth-type: apiKey
