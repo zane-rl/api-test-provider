@@ -3,7 +3,7 @@
 
 from collections import OrderedDict
 
-from . import auth, pagination, payload, depend, faults, typemismatch
+from . import auth, pagination, payload, depend, faults, switchable, typemismatch
 from .common import reset_tokens
 
 GROUPS = [
@@ -35,8 +35,11 @@ def reset_all(scenario=None):
     """复位计数器与已签发令牌（请求日志由 server 侧清空）。
 
     给 scenario 则只复位该场景相关的状态：令牌按场景过滤，
-    故障计数器只属于 `faults` 场景，所以别的场景不碰它。
+    故障计数器只属于 `faults` 场景，所以别的场景不碰它；
+    `depend-switchable` 的故障开关与调用计数同理，只在全量复位或复位它自己时还原。
     """
     reset_tokens(scenario)
     if scenario is None or scenario == "faults":
         faults.reset_counters()
+    if scenario is None or scenario == switchable.NAME:
+        switchable.reset_switches()

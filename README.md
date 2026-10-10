@@ -63,7 +63,8 @@ scenarios/
   pagination.py             B 分页（9 个场景）
   payload.py                C 请求与响应（9 个场景）
   depend.py                 D 依赖（2 个场景）
-  faults.py                 E 故障（1 个场景）
+  faults.py                 E 故障（2 个场景：faults，以及由它一并注册的 depend-switchable）
+  switchable.py             depend-switchable：分支依赖 + 按接口切换持续失败的开关与调用计数
   typemismatch.py           F 类型不一致（1 个场景，**唯一手写 schema 的地方**）
   negative.py               反例文档：Swagger 2.0 / OpenAPI 3.1.0（应被后端拒绝，不计入场景数）
   bundle.py                 按鉴权类型合并的 OpenAPI（由单场景文档改名合并而来）
@@ -98,13 +99,13 @@ tests/                      标准库 unittest
 
 | 鉴权类型 | 场景数 | 静态文件 | 在线地址 |
 |---|---|---|---|
-| `none` 无鉴权 | 21 | `openapi/none.yaml` | `/openapi/none.yaml` |
+| `none` 无鉴权 | 22 | `openapi/none.yaml` | `/openapi/none.yaml` |
 | `bearer` | 8 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
 | `apiKey` | 7 | `openapi/apiKey.yaml` | `/openapi/apiKey.yaml` |
 | `basic` | 2 | `openapi/basic.yaml` | `/openapi/basic.yaml` |
 | `oauth2` | 6 | `openapi/oauth2.yaml` | `/openapi/oauth2.yaml` |
 | `fixedParam` | 1 | `openapi/fixedParam.yaml` | `/openapi/fixedParam.yaml` |
-| 全部 | 45 | `openapi/all.yaml` | `/openapi/all.yaml` |
+| 全部 | 46 | `openapi/all.yaml` | `/openapi/all.yaml` |
 
 - 每份文档都有 `.yaml` / `.yml` / `.json` 三种扩展名（静态文件与在线地址都是，表里只列了 `.yaml`），内容等价；
   在线文档的 `servers` 跟随实际端口，静态文件的 `servers` 固定为 `http://127.0.0.1:18090`。
@@ -226,6 +227,10 @@ tests/                      标准库 unittest
 |  |  | `GET /drifted`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /redirect`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /ok`<br>FAULT |  | NONE | `data.items` | `id` | 5 |
+| **depend-switchable** | 分支依赖 A→B→C、A→D；按接口切换正常 / 持续失败，验证连续失败暂停与修复后恢复 | `GET /customers`<br>DATA | 无 | NONE | `data.items` | `id` | 5 |
+|  |  | `GET /customers/{customerId}/orders`<br>DATA |  | NONE | `data.items` | `order_no` | 11 |
+|  |  | `GET /orders/{orderNo}/items`<br>DATA |  | NONE | `data.items` | `item_no` | 16 |
+|  |  | `GET /addresses`<br>DATA |  | NONE | `data.items` | `address_id` | 6 |
 
 #### F 类型不一致
 
@@ -335,9 +340,47 @@ tests/                      标准库 unittest
 |---|---|---|---|
 | `depend-path` `GET /products/{sku}/batches` | `(序号 * 7) % 5`，序号取自 `DPD-000NN` | 0~4 条 | 30 个商品共 **60** 条 |
 | `depend-body` `POST /customer-orders/query` | `(序号 * 3) % 4`，序号取自 `CUS-000NN` | 0~3 条 | 12 个客户共 **18** 条 |
+| `depend-switchable` `GET /customers/{customerId}/orders` | `序号 % 3 + 1`，序号取自 `SWC-000NN` | 1~3 条 | 5 个客户共 **11** 条 |
+| `depend-switchable` `GET /orders/{orderNo}/items` | `(客户序号 + 订单行号) % 2 + 1`，取自 `SWC-000NN-O<行号>` | 1~2 条 | 11 张订单共 **16** 条 |
+| `depend-switchable` `GET /addresses?customer_id=` | `(序号 * 2) % 3`，序号取自 `SWC-000NN` | 0~2 条 | 5 个客户共 **6** 条 |
 
 前 5 个父记录的条数分别是 `2 / 4 / 1 / 3 / 0` 与 `3 / 2 / 1 / 0 / 3`——有 0 条的父记录，用来验证空结果不算失败。
 `sku` 不存在返回 404；`customerId` 缺失返回 400，不存在则返回空列表。
+
+### 可切换故障的分支依赖（`depend-switchable`）
+
+四个读取接口构成分支依赖 **A→B→C、A→D**，用来验证「接口连续失败后暂停、修好后重新同步恢复」：
+
+| 接口 | 依赖 | 正常时的条数 |
+|---|---|---|
+| A `GET /customers` | — | 5（`SWC-00001` ~ `SWC-00005`） |
+| B `GET /customers/{customerId}/orders` | 路径参数取 A 的 `id` | 各客户 `2 / 3 / 1 / 2 / 3`，共 11 |
+| C `GET /orders/{orderNo}/items` | 路径参数取 B 的 `order_no` | 共 16 |
+| D `GET /addresses?customer_id=` | 查询参数取 A 的 `id` | 各客户 `2 / 1 / 0 / 2 / 1`，共 6 |
+
+- 主键都可预测：订单号 `<客户 id>-O<行号>`、明细号 `<订单号>-I<行号>`、地址号 `<客户 id>-A<行号>`；同一个父记录每次返回的子记录完全相同。
+- 每个接口有一个**开关键**（清单里的 `faultKey`：`customers` / `orders` / `items` / `addresses`），由
+  `/__admin/faults?scenario=depend-switchable` 在运行期切换，不用重启、不影响别的场景：
+
+  ```bash
+  # 把 B 切到持续失败（status 可省，缺省 503，可设 400~599）
+  curl -s -X POST 'http://127.0.0.1:18090/__admin/faults?scenario=depend-switchable' \
+       -H 'Content-Type: application/json' -d '{"endpoint":"orders","mode":"fail","status":503}'
+  # 一次切多个
+  curl -s -X POST 'http://127.0.0.1:18090/__admin/faults?scenario=depend-switchable' \
+       -H 'Content-Type: application/json' \
+       -d '{"switches":[{"endpoint":"customers","mode":"fail"},{"endpoint":"orders","mode":"normal"}]}'
+  # 查看开关与调用次数
+  curl -s 'http://127.0.0.1:18090/__admin/faults?scenario=depend-switchable'
+  ```
+
+- **持续失败**是指一直返回该状态码与 JSON 错误体（`{"code": 503, "message": "..."}`），直到切回 `normal`；
+  与 `faults` 的 `/flaky`（按调用次数失败、之后自动成功）不同。处在持续失败时先于参数校验返回。
+- `GET` 返回每个接口的 `mode` / `failStatus` 与 `calls`（`total` / `succeeded` / `failed`）：自上次复位以来的调用次数，
+  非 2xx / 3xx 的响应（含被开关拦下的、404、400）都计入 `failed`。切开关不清计数；取文档不计数。
+- 复位：`POST /__admin/reset?scenario=depend-switchable` 把四个开关还原为正常并把计数归零；
+  不带场景名的全量复位同样会还原。复位别的场景不动它。
+- 文档与开关状态无关：生成文档时跳过开关与计数，接口处在持续失败时取到的文档也不变。
 
 ### 记录的字段形态
 
@@ -366,10 +409,12 @@ tests/                      标准库 unittest
 | `GET /health` | `{"status":"ok"}` |
 | `GET /__admin/scenarios` | 全部场景清单：文档地址（`openapiUrl` 与三种扩展名的 `openapiUrls`）、顶层 `negativeDocuments`（反例文档）、鉴权方式与测试凭证（含 `prefix` / `extraAuthParams` / `tokenFlow`）、每个端点的 `method` / `path` / `role` / `paginationType` / 分页参数名与位置 / `recordPath` / `primaryKey` / `expectedTotal` / `sampleFirst3` |
 | `GET /__admin/requests?scenario=<名字>&limit=<N>` | 服务端实际收到的请求日志，按时间顺序；含序号、方法、路径、解码后的 Query、`rawQuery`、全部请求头、Cookie、原始请求体、响应状态码。内存最多保留最近 5000 条 |
-| `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、已签发令牌与令牌序号。**不改 config** |
-| `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位。场景名不存在返回 404 |
+| `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、`depend-switchable` 的故障开关与调用计数、已签发令牌与令牌序号。**不改 config** |
+| `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位，故障开关与调用计数只在 `scenario=depend-switchable` 时还原。场景名不存在返回 404 |
 | `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 6；0 表示不延迟，自测靠它跑快） |
-| `GET /__admin/state` | 当前配置、故障计数器、已签发令牌快照（排查用） |
+| `GET /__admin/faults?scenario=depend-switchable` | 该场景四个接口的故障开关（`mode` / `failStatus`）与自上次复位以来的调用次数（`calls.total` / `succeeded` / `failed`） |
+| `POST /__admin/faults?scenario=depend-switchable` | 切换开关：体为 `{"endpoint": 开关键, "mode": "normal" \| "fail", "status": 状态码}` 或 `{"switches": [...]}`；`status` 缺省 503、可设 400~599；有一项不合法整体返回 400。缺 `scenario` 返回 400，场景没有开关返回 404 |
+| `GET /__admin/state` | 当前配置、故障计数器、`depend-switchable` 的故障开关（`faultSwitches`）、已签发令牌快照（排查用） |
 | `GET /openapi/<鉴权类型\|all>.yaml` / `.yml` / `.json` | 按鉴权类型合并的 OpenAPI 文档（见上文），同样不记日志；`/__admin/scenarios` 的 `openapiBundles`（`.yaml`）与 `openapiBundleUrls`（三种扩展名）列出全部地址 |
 
 鉴权描述的结构（`/__admin/scenarios` → `scenarios[].auth`）：
@@ -441,6 +486,8 @@ tests/                      标准库 unittest
   `/__admin/config` 的配置项（`oauth2BasicTokenMaxUses` / `oauth2ExpiringTokenTtlSeconds`）、
   以及故障场景那几个计数器（它们本就只属于 `faults`）。所以：
   **改配置或跑 `faults` 场景的用例必须独占实例或串行**，其余场景并发跑没问题。
+  `depend-switchable` 的故障开关与调用计数也是进程级的：两拨人同时用这个场景会互相切开关，
+  而且别人做不带场景名的全量复位会把正在「持续失败」的接口切回正常。
 - 令牌有两种失效方式：按**使用次数**（`oauth2-basic`、`oauth2-paged-maxuses`，可复现）与按**时间**
   （`oauth2-expiring`、`oauth2-paged-expiring`）。其余场景的令牌不失效，`expires_in` 恒为 3600。
 - `oauth2-paged-expiring` 的每页延迟默认 6 秒（一次完整同步约 30 秒）：跑它的用例会慢，
@@ -467,3 +514,4 @@ tests/                      标准库 unittest
 | 2026-09-30 | H-SC1：新增 `required-business-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /customers/{customerId}`），路径参数 `customerId` 与 required Query `tenant` 均无 example / default、也不来自前置接口，供后端「验证连接前缺值返回 NEEDS_TEST_VALUES 且不发请求」使用；缺 `tenant` 返回 400、未知客户 404；清单新增 `requiredTestValues`。38 个场景 / 75 个端点 / 145 条自测。 |
 | 2026-10-08 | H-SC2：新增 `dotted-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /items`），Query 参数名本身带点号：必填 `filter.name`、可选整数 `page.size`，均无 example / default；记录回显 `filterName` / `pageSize`，缺或空 `filter.name` 返回 400；清单给 `requiredTestValues`。39 个场景 / 76 个端点 / 151 条自测。 |
 | 2026-10-08 | H-1008：按当日需求更新新增 6 个场景 / 11 个端点：`shared-params`（公共参数 `components.parameters` + `$ref`，操作级 / 路径项级两种引用位置，内联同名与重复参数作对照）、`token-json-body` / `token-form-body`（取 Token 接口只认一种请求体类型，另一种返回 415；Token 路径 `data.token.value` / 顶层 `tokenValue`）、`next-link-only`（只能跟随 `next` 完整地址翻页，35 条 4 页）、`root-object-record`（根对象即一条记录，含标量数组与对象数组）、`form-body-post`（表单请求体的业务 POST）；清单新增 `sharedParameters` / `arrayFields` / `expectedBackendSupport`。**文档格式**：所有文档提供 `.json` / `.yaml` / `.yml` 三种扩展名（同一文档对象序列化），清单新增 `openapiUrls` / `openapiBundleUrls`；`apikey-header` / `page-number` 不再提供 Swagger 2.0，清单移除 `swagger2Url`；新增不计入场景数的反例文档 `/__negative/swagger2.*` 与 `/__negative/openapi31.*`（清单 `negativeDocuments`）。45 个场景 / 87 个端点 / 179 条自测。 |
+| 2026-10-11 | H-1011：新增 `depend-switchable` 场景（E 组，无鉴权，4 个端点）：分支依赖 A→B→C、A→D（`/customers` → `/customers/{customerId}/orders` → `/orders/{orderNo}/items`，`/customers` → `/addresses?customer_id=`，正常时 5 / 11 / 16 / 6 条）；新增 admin 接口 `GET/POST /__admin/faults?scenario=depend-switchable`，按接口在运行期切换「正常 / 持续失败」（状态码可设，默认 503），并返回每个接口自上次复位以来的调用次数（成功、失败分开）；按场景复位与全量复位都会还原开关与计数；`/__admin/state` 新增 `faultSwitches`；清单端点新增 `faultKey` / `dependsOn`。46 个场景 / 91 个端点 / 195 条自测。 |

@@ -31,6 +31,7 @@ from scenarios import REGISTRY, reset_all
 from scenarios import auth as auth_module
 from scenarios import faults as faults_module
 from scenarios import negative as negative_module
+from scenarios import switchable as switchable_module
 from scenarios.common import ApiError, Ctx, Resp, error_resp, json_resp, token_snapshot
 from scenarios.bundle import build_bundle, bundle_names
 from scenarios.openapi import build_openapi
@@ -403,9 +404,28 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(400, "请求体必须是 JSON 对象")
             return json_resp({"status": "ok", "config": auth_module.apply_config(patch)})
 
+        if path == "/__admin/faults":
+            # 按接口的故障开关：目前只有 depend-switchable 一个场景有
+            name = (query_all.get("scenario") or [None])[0]
+            if not name:
+                raise ApiError(400, "缺少参数 scenario（有故障开关的场景：%s）"
+                               % switchable_module.NAME)
+            if name != switchable_module.NAME:
+                raise ApiError(404, "场景 %s 没有故障开关（有开关的场景：%s）"
+                               % (name, switchable_module.NAME))
+            if method == "POST":
+                try:
+                    patch = json.loads(body_raw) if body_raw.strip() else None
+                except ValueError:
+                    raise ApiError(400, "请求体不是合法 JSON")
+                switchable_module.apply_switches(patch)
+            return json_resp({"scenario": name,
+                              "endpoints": switchable_module.switches_snapshot()})
+
         if path == "/__admin/state" and method == "GET":
             return json_resp({"config": auth_module.config_snapshot(),
                               "faultCounters": faults_module.counters_snapshot(),
+                              "faultSwitches": switchable_module.switches_snapshot(),
                               "issuedTokens": token_snapshot()})
 
         return error_resp(404, "无此 admin 接口：%s" % path)

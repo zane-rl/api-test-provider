@@ -2,6 +2,7 @@
 """E 类：故障注入场景（无鉴权）。
 
 照搬现有 mock 的 8 个故障端点，另加一个 302 重定向。
+可按接口切换「正常 / 持续失败」的分支依赖场景 `depend-switchable` 在 `switchable.py`，由这里一并注册。
 所有计数器可由 `POST /__admin/reset` 复位，保证用例可重复执行。
 
 这些端点有副作用（计数、sleep），因此**不参与「调用一次 handler 推断响应 schema」**，
@@ -11,6 +12,7 @@
 import threading
 import time
 
+from . import switchable
 from .common import (
     Endpoint, Scenario, NO_AUTH, build_dataset, json_resp, Resp, qp,
 )
@@ -170,4 +172,5 @@ def build_scenarios():
                  dataset=lambda: list(FAULT_ROWS), doc_sample={}),
     ]
     return [Scenario("faults", "故障注入", "错误处理策略、重试、限流、超时、非 JSON、截断、结构漂移、重定向",
-                     endpoints, auth=NO_AUTH)]
+                     endpoints, auth=NO_AUTH),
+            switchable.build_scenario()]

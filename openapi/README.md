@@ -2,7 +2,7 @@
 
 > 由 `tools/export_openapi_by_auth.py` 生成，**勿手改**；改了场景后重跑该脚本。
 
-本目录把测试 API 提供服务的 45 个场景 / 87 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 文档，供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`，另有 `.yaml` / `.yml`）。
+本目录把测试 API 提供服务的 46 个场景 / 91 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 文档，供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`，另有 `.yaml` / `.yml`）。
 
 每份文档都提供 `.yaml` / `.yml` / `.json` 三种扩展名，内容等价：三个文件由同一个文档对象序列化而来，不是分别维护的。全部文档都是 OpenAPI 3.0.3；**不提供** Swagger 2.0 与 OpenAPI 3.1 的正常文档，这两种版本只有「应被拒绝」的反例（见文末）。
 
@@ -10,13 +10,13 @@
 
 | 鉴权类型 | 说明 | 静态文件 | 在线地址 | 场景 | 端点（DATA / TOKEN / FAULT） |
 |---|---|---|---|---|---|
-| `none` 无鉴权 | 不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里 | [`none.yaml`](none.yaml) · [`.yml`](none.yml) · [`.json`](none.json) | `http://127.0.0.1:18090/openapi/none.<yaml\|yml\|json>` | 21 | 41 / 0 / 10 |
+| `none` 无鉴权 | 不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里 | [`none.yaml`](none.yaml) · [`.yml`](none.yml) · [`.json`](none.json) | `http://127.0.0.1:18090/openapi/none.<yaml\|yml\|json>` | 22 | 45 / 0 / 10 |
 | `bearer` Bearer Token | 固定令牌，或先调登录接口取令牌再注入 Header / Query | [`bearer.yaml`](bearer.yaml) · [`.yml`](bearer.yml) · [`.json`](bearer.json) | `http://127.0.0.1:18090/openapi/bearer.<yaml\|yml\|json>` | 8 | 9 / 5 / 0 |
 | `apiKey` API Key | Header / Query / Cookie 三种位置，含前缀与附加鉴权参数 | [`apiKey.yaml`](apiKey.yaml) · [`.yml`](apiKey.yml) · [`.json`](apiKey.json) | `http://127.0.0.1:18090/openapi/apiKey.<yaml\|yml\|json>` | 7 | 7 / 0 / 0 |
 | `basic` HTTP Basic | 用户名 + 密码，含附加鉴权参数 | [`basic.yaml`](basic.yaml) · [`.yml`](basic.yml) · [`.json`](basic.json) | `http://127.0.0.1:18090/openapi/basic.<yaml\|yml\|json>` | 2 | 2 / 0 / 0 |
 | `oauth2` OAuth2 客户端凭证 | client_credentials；client_secret_post / basic、令牌按次数或按时间失效 | [`oauth2.yaml`](oauth2.yaml) · [`.yml`](oauth2.yml) · [`.json`](oauth2.json) | `http://127.0.0.1:18090/openapi/oauth2.<yaml\|yml\|json>` | 6 | 6 / 6 / 0 |
 | `fixedParam` 固定参数 | Header + Query + Cookie 三处同时带固定值 | [`fixedParam.yaml`](fixedParam.yaml) · [`.yml`](fixedParam.yml) · [`.json`](fixedParam.json) | `http://127.0.0.1:18090/openapi/fixedParam.<yaml\|yml\|json>` | 1 | 1 / 0 / 0 |
-| `all` 全部场景 | 全部鉴权类型 | [`all.yaml`](all.yaml) · [`.yml`](all.yml) · [`.json`](all.json) | `http://127.0.0.1:18090/openapi/all.<yaml\|yml\|json>` | 45 | 66 / 11 / 10 |
+| `all` 全部场景 | 全部鉴权类型 | [`all.yaml`](all.yaml) · [`.yml`](all.yml) · [`.json`](all.json) | `http://127.0.0.1:18090/openapi/all.<yaml\|yml\|json>` | 46 | 70 / 11 / 10 |
 
 ## 本地启动与获取文档
 
@@ -113,6 +113,10 @@ curl -s http://127.0.0.1:18090/__admin/scenarios | python3 -m json.tool   # 清�
 |  |  | `GET /s/faults/drifted`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /s/faults/redirect`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /s/faults/ok`<br>FAULT |  | NONE | `data.items` | `id` | 5 |
+| **depend-switchable** | 分支依赖 A→B→C、A→D；按接口切换正常 / 持续失败，验证连续失败暂停与修复后恢复 | `GET /s/depend-switchable/customers`<br>DATA | 无 | NONE | `data.items` | `id` | 5 |
+|  |  | `GET /s/depend-switchable/customers/{customerId}/orders`<br>DATA |  | NONE | `data.items` | `order_no` | 11 |
+|  |  | `GET /s/depend-switchable/orders/{orderNo}/items`<br>DATA |  | NONE | `data.items` | `item_no` | 16 |
+|  |  | `GET /s/depend-switchable/addresses`<br>DATA |  | NONE | `data.items` | `address_id` | 6 |
 | **type-mismatch** | 验证接口时把真实响应与已保存字段类型做兼容性比对：文档声明与实际返回故意不一致（全项目唯一，含 2 个不该判不兼容的负例与 1 个对照组） | `GET /s/type-mismatch/number-as-string`<br>DATA | 无 | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /s/type-mismatch/string-as-number`<br>DATA |  | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /s/type-mismatch/bool-as-string`<br>DATA |  | NONE | `data.items` | `id` | 6 |

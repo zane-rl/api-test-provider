@@ -5,7 +5,7 @@ info:
   title: 测试 API 提供服务 · 鉴权：无鉴权
   version: "1.0.0"
   description: |-
-    按鉴权类型合并的测试接口文档：不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里（21 个场景 / 51 个端点）。
+    按鉴权类型合并的测试接口文档：不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里（22 个场景 / 55 个端点）。
 
     - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
     - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
@@ -174,6 +174,14 @@ tags:
       extraAuthParams: []
       tokenFlow: null
     x-openapi-url: http://127.0.0.1:18090/s/faults/openapi.json
+  - name: depend-switchable
+    description: 可切换故障的分支依赖（E 故障）：分支依赖 A→B→C、A→D；按接口切换正常 / 持续失败，验证连续失败暂停与修复后恢复
+    x-auth:
+      type: none
+      credentials: []
+      extraAuthParams: []
+      tokenFlow: null
+    x-openapi-url: http://127.0.0.1:18090/s/depend-switchable/openapi.json
   - name: type-mismatch
     description: 字段类型不一致（刻意）（F 类型不一致）：验证接口时把真实响应与已保存字段类型做兼容性比对：文档声明与实际返回故意不一致（全项目唯一，含 2 个不该判不兼容的负例与 1 个对照组）
     x-auth:
@@ -4373,6 +4381,372 @@ paths:
         primaryKey: id
         expectedTotal: 5
         requiresAuth: true
+  /s/depend-switchable/customers:
+    get:
+      operationId: dependSwitchable_listSwitchableCustomers
+      summary: 查询客户列表（A，依赖的根）
+      description: 不分页，共 5 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+                      total:
+                        type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: SWC-00001
+                      name: SWC物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: SWC-00002
+                      name: SWC物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+                  total: 5
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listSwitchableCustomers
+      tags:
+        - depend-switchable
+      x-scenario: depend-switchable
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 5
+        requiresAuth: true
+        note: 开关键 customers，见 /__admin/faults?scenario=depend-switchable
+        faultKey: customers
+  "/s/depend-switchable/customers/{customerId}/orders":
+    get:
+      operationId: dependSwitchable_listSwitchableOrders
+      summary: 查询客户订单（B，依赖 A）
+      description: "路径参数 customerId 依赖 /customers 的 id；条数 = 序号 % 3 + 1，取值 1~3，全部客户合计 11 条；客户不存在返回 404"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            order_no:
+                              type: string
+                            customer_id:
+                              type: string
+                            amount:
+                              type: number
+                            paid:
+                              type: boolean
+                            placed_at:
+                              type: string
+                              format: date-time
+                      total:
+                        type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - order_no: SWC-00001-O1
+                      customer_id: SWC-00001
+                      amount: 111.5
+                      paid: true
+                      placed_at: "2026-01-02T09:00:00+08:00"
+                    - order_no: SWC-00001-O2
+                      customer_id: SWC-00001
+                      amount: 113.0
+                      paid: false
+                      placed_at: "2026-01-02T10:00:00+08:00"
+                  total: 2
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          description: 客户 ID，来自 /customers 的 id 字段
+          schema:
+            type: string
+      x-original-operation-id: listSwitchableOrders
+      tags:
+        - depend-switchable
+      x-scenario: depend-switchable
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: order_no
+        expectedTotal: 11
+        requiresAuth: true
+        note: 依赖 /customers.id；expectedTotal 为对全部父记录求和；开关键 orders，见 /__admin/faults?scenario=depend-switchable
+        pathSample:
+          customerId: SWC-00001
+        faultKey: orders
+        dependsOn:
+          path: /customers
+          field: id
+          param:
+            name: customerId
+            in: PATH
+  "/s/depend-switchable/orders/{orderNo}/items":
+    get:
+      operationId: dependSwitchable_listSwitchableOrderItems
+      summary: 查询订单明细（C，依赖 B）
+      description: "路径参数 orderNo 依赖 /customers/{customerId}/orders 的 order_no；条数 = (客户序号 + 订单行号) % 2 + 1，取值 1~2，全部订单合计 16 条；订单不存在返回 404"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            item_no:
+                              type: string
+                            order_no:
+                              type: string
+                            sku:
+                              type: string
+                            quantity:
+                              type: integer
+                            unit_price:
+                              type: number
+                      total:
+                        type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - item_no: SWC-00001-O1-I1
+                      order_no: SWC-00001-O1
+                      sku: SKU-012
+                      quantity: 3
+                      unit_price: 12.4
+                  total: 1
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: orderNo
+          in: path
+          required: true
+          description: "订单号，来自 /customers/{customerId}/orders 的 order_no 字段"
+          schema:
+            type: string
+      x-original-operation-id: listSwitchableOrderItems
+      tags:
+        - depend-switchable
+      x-scenario: depend-switchable
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: item_no
+        expectedTotal: 16
+        requiresAuth: true
+        note: "依赖 /customers/{customerId}/orders.order_no；expectedTotal 为对全部父记录求和；开关键 items，见 /__admin/faults?scenario=depend-switchable"
+        pathSample:
+          orderNo: SWC-00001-O1
+        faultKey: items
+        dependsOn:
+          path: "/customers/{customerId}/orders"
+          field: order_no
+          param:
+            name: orderNo
+            in: PATH
+  /s/depend-switchable/addresses:
+    get:
+      operationId: dependSwitchable_listSwitchableAddresses
+      summary: 查询客户地址（D，依赖 A）
+      description: "查询参数 customer_id 依赖 /customers 的 id；条数 = (序号 * 2) % 3，取值 0~2，全部客户合计 6 条；缺 customer_id 返回 400，客户不存在返回空列表"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            address_id:
+                              type: string
+                            customer_id:
+                              type: string
+                            city:
+                              type: string
+                            detail:
+                              type: string
+                            is_default:
+                              type: boolean
+                      total:
+                        type: integer
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - address_id: SWC-00001-A1
+                      customer_id: SWC-00001
+                      city: 成都
+                      detail: 测试路 101 号
+                      is_default: true
+                    - address_id: SWC-00001-A2
+                      customer_id: SWC-00001
+                      city: 上海
+                      detail: 测试路 102 号
+                      is_default: false
+                  total: 2
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      parameters:
+        - name: customer_id
+          in: query
+          required: true
+          description: 客户 ID，来自 /customers 的 id 字段
+          schema:
+            type: string
+      x-original-operation-id: listSwitchableAddresses
+      tags:
+        - depend-switchable
+      x-scenario: depend-switchable
+      x-auth-type: none
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: address_id
+        expectedTotal: 6
+        requiresAuth: true
+        note: 依赖 /customers.id；expectedTotal 为对全部父记录求和；开关键 addresses，见 /__admin/faults?scenario=depend-switchable
+        faultKey: addresses
+        dependsOn:
+          path: /customers
+          field: id
+          param:
+            name: customer_id
+            in: QUERY
   /s/type-mismatch/number-as-string:
     get:
       operationId: typeMismatch_listNumberAsString
