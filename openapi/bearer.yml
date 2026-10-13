@@ -5,7 +5,7 @@ info:
   title: 测试 API 提供服务 · 鉴权：Bearer Token
   version: "1.0.0"
   description: |-
-    按鉴权类型合并的测试接口文档：固定令牌，或先调登录接口取令牌再注入 Header / Query（8 个场景 / 14 个端点）。
+    按鉴权类型合并的测试接口文档：固定令牌，或先调登录接口取令牌再注入 Header / Query（10 个场景 / 18 个端点）。
 
     - 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。
     - 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。
@@ -191,6 +191,69 @@ tags:
           prefix: Bearer
         url: http://127.0.0.1:18090/s/token-form-body/auth/token
     x-openapi-url: http://127.0.0.1:18090/s/token-form-body/openapi.json
+  - name: token-typed-fields
+    description: Bearer 取 Token（返回里带布尔与小数字段）（A 鉴权）：取 Token 返回除令牌（文本）与有效期（整数）外还有布尔、小数字段；有效期路径的候选不应包含布尔字段
+    x-auth:
+      type: bearer
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: "<由令牌接口签发>"
+          prefix: Bearer
+          note: 注入到 HEADER Authorization，带前缀 Bearer
+      extraAuthParams: []
+      tokenFlow:
+        kind: REQUEST_TOKEN
+        method: POST
+        contentType: application/json
+        requestBody:
+          username: test
+          password: test-pass
+        tokenPath: data.accessToken
+        expiresInPath: data.expiresIn
+        inject:
+          in: HEADER
+          name: Authorization
+          prefix: Bearer
+        nonTextTokenResponseFields:
+          boolean:
+            - success
+            - data.refreshable
+          number:
+            - data.refreshRatio
+          integer:
+            - code
+            - data.expiresIn
+        url: http://127.0.0.1:18090/s/token-typed-fields/login
+    x-openapi-url: http://127.0.0.1:18090/s/token-typed-fields/openapi.json
+  - name: token-slow
+    description: Bearer 取 Token（取令牌接口延迟返回）（A 鉴权）：取 Token 接口校验通过后固定延迟若干秒再返回，验证取令牌期间的等待与超时提示
+    x-auth:
+      type: bearer
+      credentials:
+        - in: HEADER
+          name: Authorization
+          testValue: "<由令牌接口签发>"
+          prefix: Bearer
+          note: 注入到 HEADER Authorization，带前缀 Bearer
+      extraAuthParams: []
+      tokenFlow:
+        kind: REQUEST_TOKEN
+        method: POST
+        contentType: application/json
+        requestBody:
+          username: test
+          password: test-pass
+        tokenPath: data.accessToken
+        expiresInPath: data.expiresIn
+        inject:
+          in: HEADER
+          name: Authorization
+          prefix: Bearer
+        tokenDelaySeconds: 5
+        note: 取令牌接口延迟返回，秒数由 /__admin/config 的 tokenSlowDelaySeconds 调整（缺省 5）
+        url: http://127.0.0.1:18090/s/token-slow/login
+    x-openapi-url: http://127.0.0.1:18090/s/token-slow/openapi.json
 paths:
   /s/bearer-static/items:
     get:
@@ -1450,6 +1513,371 @@ paths:
         primaryKey: id
         expectedTotal: 20
         requiresAuth: true
+  /s/token-typed-fields/login:
+    post:
+      operationId: tokenTypedFields_login
+      summary: 登录并签发访问令牌（写操作，不要勾选为数据接口）
+      description: 账号 test / test-pass。令牌在 data.accessToken，注入到 HEADER Authorization，带前缀 Bearer。返回里另有布尔字段 success、data.refreshable 与小数字段 data.refreshRatio：令牌路径是 data.accessToken，有效期（秒）路径是 data.expiresIn
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      expiresIn:
+                        type: integer
+                      tokenType:
+                        type: string
+                      refreshable:
+                        type: boolean
+                      refreshRatio:
+                        type: number
+              example:
+                code: 0
+                message: ok
+                success: true
+                data:
+                  accessToken: tok-token-typed-fields-1
+                  expiresIn: 3600
+                  tokenType: Bearer
+                  refreshable: true
+                  refreshRatio: 0.8
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+            example:
+              username: test
+              password: test-pass
+      security: []
+      x-original-operation-id: login
+      tags:
+        - token-typed-fields
+      x-scenario: token-typed-fields
+      x-auth-type: bearer
+      x-test:
+        role: TOKEN
+        paginationType: NONE
+        pagination: {}
+        recordPath: null
+        primaryKey: null
+        expectedTotal: null
+        requiresAuth: false
+  /s/token-typed-fields/items:
+    get:
+      operationId: tokenTypedFields_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: TOKEN-TYPED-FIELDS-00001
+                      name: TOKEN-TYPED-FIELDS物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: TOKEN-TYPED-FIELDS-00002
+                      name: TOKEN-TYPED-FIELDS物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - token-typed-fields
+      security:
+        - token-typed-fields.tokenAuth: []
+      x-scenario: token-typed-fields
+      x-auth-type: bearer
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
+  /s/token-slow/login:
+    post:
+      operationId: tokenSlow_login
+      summary: 登录并签发访问令牌（写操作，不要勾选为数据接口）
+      description: 账号 test / test-pass。令牌在 data.accessToken，注入到 HEADER Authorization，带前缀 Bearer。校验通过后延迟 5 秒再返回（配置项 tokenSlowDelaySeconds，0~60），账号密码错误立即返回 401、不延迟
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      accessToken:
+                        type: string
+                      expiresIn:
+                        type: integer
+                      tokenType:
+                        type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  accessToken: tok-token-slow-1
+                  expiresIn: 3600
+                  tokenType: Bearer
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+            example:
+              username: test
+              password: test-pass
+      security: []
+      x-original-operation-id: login
+      tags:
+        - token-slow
+      x-scenario: token-slow
+      x-auth-type: bearer
+      x-test:
+        role: TOKEN
+        paginationType: NONE
+        pagination: {}
+        recordPath: null
+        primaryKey: null
+        expectedTotal: null
+        requiresAuth: false
+  /s/token-slow/items:
+    get:
+      operationId: tokenSlow_listItems
+      summary: 查询数据项列表
+      description: 读取数据项，不分页，一次返回全部 20 条
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            name:
+                              type: string
+                            category:
+                              type: string
+                            price:
+                              type: number
+                            quantity:
+                              type: integer
+                            active:
+                              type: boolean
+                            updated_at:
+                              type: string
+                              format: date-time
+                            remark:
+                              type: string
+                              nullable: true
+                            spec:
+                              type: object
+                              properties:
+                                length:
+                                  type: number
+                                width:
+                                  type: number
+                                unit:
+                                  type: string
+              example:
+                code: 0
+                message: ok
+                data:
+                  items:
+                    - id: TOKEN-SLOW-00001
+                      name: TOKEN-SLOW物料1
+                      category: 整机
+                      price: 11.27
+                      quantity: 13
+                      active: true
+                      updated_at: "2026-01-01T09:00:00+08:00"
+                      remark: 备注1
+                      spec:
+                        length: 11.5
+                        width: 6.25
+                        unit: cm
+                    - id: TOKEN-SLOW-00002
+                      name: TOKEN-SLOW物料2
+                      category: 配件
+                      price: 12.64
+                      quantity: 26
+                      active: true
+                      updated_at: "2026-01-01T10:00:00+08:00"
+                      remark: 备注2
+                      spec:
+                        length: 12.5
+                        width: 7.25
+                        unit: cm
+        default:
+          description: 错误响应（参数、鉴权或业务错误）
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          description: 凭证缺失或错误
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Error"
+      x-original-operation-id: listItems
+      tags:
+        - token-slow
+      security:
+        - token-slow.tokenAuth: []
+      x-scenario: token-slow
+      x-auth-type: bearer
+      x-test:
+        role: DATA
+        paginationType: NONE
+        pagination: {}
+        recordPath: data.items
+        primaryKey: id
+        expectedTotal: 20
+        requiresAuth: true
 components:
   schemas:
     Error:
@@ -1505,4 +1933,12 @@ components:
       type: http
       scheme: bearer
       description: Token 获取地址：POST http://127.0.0.1:18090/s/token-form-body/auth/token，请求体类型 application/x-www-form-urlencoded，字段 appKey=test-client、appSecret=test-secret；Token 字段路径 tokenValue，有效期（秒）字段路径 expiresIn；业务接口放在请求头 Authorization，带前缀 Bearer
+    token-typed-fields.tokenAuth:
+      type: http
+      scheme: bearer
+      description: 令牌由本场景的令牌接口签发
+    token-slow.tokenAuth:
+      type: http
+      scheme: bearer
+      description: 令牌由本场景的令牌接口签发
 x-auth-type: bearer

@@ -13,7 +13,7 @@ import time
 from .common import (
     Endpoint, Scenario, AuthSpec, ApiError,
     api_key_req, extra_param_req, bearer_static_req, basic_req, dynamic_token_req,
-    build_dataset, json_resp, error_resp, issue_token,
+    build_dataset, json_resp, error_resp, issue_token, json_type_of,
     qp, hp, json_body, form_body,
     require_media_type, JSON_MEDIA_TYPE, FORM_MEDIA_TYPE,
 )
@@ -39,7 +39,10 @@ CONFIG = {
     "oauth2PagedTtlSeconds": 35,
     # oauth2-paged-expiring：每个业务请求的服务端延迟。取 6 秒是算过的，见下方场景注册处
     "oauth2PagedDelaySeconds": 6,
+    # token-slow：取令牌接口校验通过后延迟多少秒再返回
+    "tokenSlowDelaySeconds": 5,
 }
+TOKEN_SLOW_DEFAULT_SECONDS = CONFIG["tokenSlowDelaySeconds"]
 _CONFIG_LOCK = threading.Lock()
 
 
@@ -50,6 +53,7 @@ CONFIG_BOUNDS = {
     "oauth2PagedTokenMaxUses": (1, 1000),
     "oauth2PagedTtlSeconds": (1, 3600),
     "oauth2PagedDelaySeconds": (0, 60),
+    "tokenSlowDelaySeconds": (0, 60),
 }
 
 
@@ -93,47 +97,73 @@ def _dataset_for(name):
     return build_dataset(name.upper(), 20)
 
 
+# token-typed-fields：取 Token 返回里多带的字段（布尔两个、小数一个）
+TYPED_TOKEN_EXTRA_TOP = {"success": True}
+TYPED_TOKEN_EXTRA_DATA = {"refreshable": True, "refreshRatio": 0.8}
+
+# oauth2-scope-required：令牌接口唯一接受的授权范围（与 securityScheme 声明的 scope 一致）
+REQUIRED_SCOPE = "read"
+
+
 # ==================== 登录 / 令牌端点 ====================
 
-def _login_endpoint(scenario_name, inject_desc):
+def _login_endpoint(scenario_name, inject_desc, extra_top=None, extra_data=None,
+                    delay_key=None, extra_description=""):
     """调用接口获取 Token 的登录端点。
 
     operationId / summary 用明显的写语义词（login），避免被后端判成读取接口而误勾选。
+
+    extra_top / extra_data：在响应顶层 / data 里多返回的固定字段（`token-typed-fields` 用来带
+    布尔与小数字段）；delay_key：校验通过后按该配置项延迟若干秒再返回（`token-slow`）。
+    都不给时就是最基本的登录端点。
     """
+    extra_top = dict(extra_top or {})
+    extra_data = dict(extra_data or {})
+
+    def payload_of(token):
+        payload = {"code": 0, "message": "ok"}
+        payload.update(extra_top)
+        payload["data"] = dict({"accessToken": token, "expiresIn": 3600, "tokenType": "Bearer"},
+                               **extra_data)
+        return payload
 
     def handler(ctx):
         body = ctx.json_body_or_400()
         if body.get("username") != LOGIN_USER or body.get("password") != LOGIN_PASS:
             return error_resp(401, "登录失败：用户名或密码错误")
-        token = issue_token(scenario_name)
-        return json_resp({"code": 0, "message": "ok",
-                          "data": {"accessToken": token, "expiresIn": 3600,
-                                   "tokenType": "Bearer"}})
+        # 账号密码错误立即返回，只有校验通过才延迟；doc_mode 下不 sleep
+        if delay_key and not ctx.doc_mode:
+            seconds = config_snapshot()[delay_key]
+            if seconds:
+                time.sleep(seconds)
+        return json_resp(payload_of(issue_token(scenario_name)))
+
+    data_props = {"accessToken": {"type": "string"},
+                  "expiresIn": {"type": "integer"},
+                  "tokenType": {"type": "string"}}
+    data_props.update({k: {"type": json_type_of(v)} for k, v in extra_data.items()})
+    props = {"code": {"type": "integer"}, "message": {"type": "string"}}
+    props.update({k: {"type": json_type_of(v)} for k, v in extra_top.items()})
+    props["data"] = {"type": "object", "properties": data_props}
 
     return Endpoint(
         "POST", "/login", handler,
         operation_id="login", summary="登录并签发访问令牌（写操作，不要勾选为数据接口）",
-        description="账号 %s / %s。令牌在 data.accessToken，%s" % (LOGIN_USER, LOGIN_PASS, inject_desc),
+        description="账号 %s / %s。令牌在 data.accessToken，%s%s"
+                    % (LOGIN_USER, LOGIN_PASS, inject_desc, extra_description),
         role="TOKEN", auth=False,
         request_body=json_body(
             {"type": "object", "required": ["username", "password"],
              "properties": {"username": {"type": "string"}, "password": {"type": "string"}}},
             {"username": LOGIN_USER, "password": LOGIN_PASS}),
         doc_sample=None,
-        response_schema={"type": "object", "properties": {
-            "code": {"type": "integer"}, "message": {"type": "string"},
-            "data": {"type": "object", "properties": {
-                "accessToken": {"type": "string"},
-                "expiresIn": {"type": "integer"},
-                "tokenType": {"type": "string"}}}}},
-        response_example={"code": 0, "message": "ok",
-                          "data": {"accessToken": "tok-%s-1" % scenario_name,
-                                   "expiresIn": 3600, "tokenType": "Bearer"}},
+        response_schema={"type": "object", "properties": props},
+        response_example=payload_of("tok-%s-1" % scenario_name),
     )
 
 
 def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
-                          max_uses_key=None, ttl_key=None):
+                          max_uses_key=None, ttl_key=None, required_scope=None):
     """OAuth2 客户端凭证令牌端点。
 
     auth_method=post  ：client_id / client_secret 放表单体；带了 Authorization 头 → 400
@@ -183,6 +213,13 @@ def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
         max_uses = config[max_uses_key] if max_uses_key else None
         ttl = config[ttl_key] if ttl_key else None
         scope = form.get("scope") or ""
+        # 只有声明了 required_scope 的场景才校验授权范围；放在客户端凭证校验之后
+        if required_scope is not None and scope != required_scope:
+            return json_resp(
+                {"error": "invalid_scope",
+                 "error_description": "本端点只接受 scope=%s，收到：%s"
+                                      % (required_scope, ("%r" % scope) if scope else "（未提供）")},
+                status=400)
         token = issue_token(scenario_name, max_uses=max_uses, scope=scope, prefix="oat",
                             ttl_seconds=ttl)
         payload = {"access_token": token, "token_type": "Bearer",
@@ -211,6 +248,12 @@ def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
         sample_headers = {"Authorization": "Basic " + base64.b64encode(
             ("%s:%s" % (CLIENT_ID, CLIENT_SECRET)).encode()).decode()}
         desc = "客户端认证方式 client_secret_basic：凭证放 Authorization: Basic 头；表单体出现 client_secret 会返回 400"
+    if required_scope is not None:
+        required = required + ["scope"]
+        props["scope"] = {"type": "string", "example": required_scope}
+        example = dict(example, scope=required_scope)
+        desc += ("；scope 必填且必须恰好是 %s，不带、为空或带别的值返回 400 "
+                 "{\"error\": \"invalid_scope\"}" % required_scope)
 
     return Endpoint(
         "POST", "/oauth/token", handler,
@@ -221,8 +264,9 @@ def _oauth_token_endpoint(scenario_name, auth_method, reject_extra_header=False,
         response_schema={"type": "object", "properties": {
             "access_token": {"type": "string"}, "token_type": {"type": "string"},
             "expires_in": {"type": "integer"}, "scope": {"type": "string"}}},
-        response_example={"access_token": "oat-%s-1" % scenario_name,
-                          "token_type": "Bearer", "expires_in": 3600},
+        response_example=dict({"access_token": "oat-%s-1" % scenario_name,
+                               "token_type": "Bearer", "expires_in": 3600},
+                              **({"scope": required_scope} if required_scope is not None else {})),
     )
 
 
@@ -234,23 +278,31 @@ def _simple(name, title, covers, auth, extra_endpoints=()):
     return Scenario(name=name, title=title, covers=covers, endpoints=endpoints, auth=auth)
 
 
-def _bearer_request_scenario(name, location, header_name, prefix, title, covers):
-    """Bearer「调用接口获取 Token」三种令牌注入位置"""
+def _bearer_request_scenario(name, location, header_name, prefix, title, covers,
+                             flow_extra=None, **login_options):
+    """Bearer「调用接口获取 Token」三种令牌注入位置。
+
+    flow_extra：额外写进清单 tokenFlow 的字段；login_options 透传给 `_login_endpoint`
+    （附加返回字段、延迟），供 `token-typed-fields` / `token-slow` 复用同一套鉴权。
+    """
     inject = {"in": location.upper(), "name": header_name, "prefix": prefix}
     inject_desc = "注入到 %s %s%s" % (location.upper(), header_name,
                                      ("，带前缀 %s" % prefix) if prefix else "，不带前缀")
+    flow = {"kind": "REQUEST_TOKEN", "method": "POST", "urlPath": "/login",
+            "contentType": "application/json",
+            "requestBody": {"username": LOGIN_USER, "password": LOGIN_PASS},
+            "tokenPath": "data.accessToken", "expiresInPath": "data.expiresIn",
+            "inject": inject}
+    flow.update(flow_extra or {})
     auth = AuthSpec(
         kind="bearer",
         requirements=[dynamic_token_req(name, location, header_name, prefix=prefix,
                                         note=inject_desc)],
-        flow={"kind": "REQUEST_TOKEN", "method": "POST", "urlPath": "/login",
-              "contentType": "application/json",
-              "requestBody": {"username": LOGIN_USER, "password": LOGIN_PASS},
-              "tokenPath": "data.accessToken", "expiresInPath": "data.expiresIn",
-              "inject": inject},
+        flow=flow,
         message="未授权",
     )
-    return _simple(name, title, covers, auth, [_login_endpoint(name, inject_desc)])
+    return _simple(name, title, covers, auth,
+                   [_login_endpoint(name, inject_desc, **login_options)])
 
 
 def _oauth2_auth(name, auth_method, extra=None, max_uses_key=None, ttl_key=None,
@@ -279,11 +331,12 @@ def _oauth2_auth(name, auth_method, extra=None, max_uses_key=None, ttl_key=None,
 
 
 def _oauth2_scenario(name, auth_method, title, covers, extra=None,
-                     max_uses_key=None, ttl_key=None, note=None):
+                     max_uses_key=None, ttl_key=None, note=None, required_scope=None):
     auth = _oauth2_auth(name, auth_method, extra, max_uses_key, ttl_key, note)
     token_ep = _oauth_token_endpoint(name, auth_method,
                                      reject_extra_header=(extra is not None),
-                                     max_uses_key=max_uses_key, ttl_key=ttl_key)
+                                     max_uses_key=max_uses_key, ttl_key=ttl_key,
+                                     required_scope=required_scope)
     return _simple(name, title, covers, auth, [token_ep])
 
 
@@ -543,5 +596,35 @@ def build_scenarios():
         _token_body_scenario("token-form-body", FORM_MEDIA_TYPE,
                              "Bearer 取 Token（表单请求体，Token 字段名非 access_token）",
                              "取 Token 接口只收 application/x-www-form-urlencoded；Token 在顶层 tokenValue"),
+        # ---- 以下三个是 H-VERIFY-1013 的补测场景 ----
+        _bearer_request_scenario(
+            "token-typed-fields", "header", "Authorization", "Bearer",
+            "Bearer 取 Token（返回里带布尔与小数字段）",
+            "取 Token 返回除令牌（文本）与有效期（整数）外还有布尔、小数字段；"
+            "有效期路径的候选不应包含布尔字段",
+            extra_top=TYPED_TOKEN_EXTRA_TOP, extra_data=TYPED_TOKEN_EXTRA_DATA,
+            extra_description="。返回里另有布尔字段 success、data.refreshable 与小数字段 "
+                              "data.refreshRatio：令牌路径是 data.accessToken，"
+                              "有效期（秒）路径是 data.expiresIn",
+            flow_extra={"nonTextTokenResponseFields": {
+                "boolean": ["success", "data.refreshable"],
+                "number": ["data.refreshRatio"],
+                "integer": ["code", "data.expiresIn"]}}),
+        _oauth2_scenario("oauth2-scope-required", "post", "OAuth2（令牌接口校验授权范围）",
+                         "OAUTH2 授权范围：令牌请求必须带 scope=read，否则 400 invalid_scope",
+                         required_scope=REQUIRED_SCOPE,
+                         note="令牌接口只接受 scope=%s：不带、为空或带别的值返回 400，"
+                              "错误体 {\"error\": \"invalid_scope\", \"error_description\": ...}；"
+                              "业务接口不再校验 scope" % REQUIRED_SCOPE),
+        _bearer_request_scenario(
+            "token-slow", "header", "Authorization", "Bearer",
+            "Bearer 取 Token（取令牌接口延迟返回）",
+            "取 Token 接口校验通过后固定延迟若干秒再返回，验证取令牌期间的等待与超时提示",
+            delay_key="tokenSlowDelaySeconds",
+            extra_description="。校验通过后延迟 %d 秒再返回（配置项 tokenSlowDelaySeconds，0~60），"
+                              "账号密码错误立即返回 401、不延迟" % TOKEN_SLOW_DEFAULT_SECONDS,
+            flow_extra={"tokenDelaySeconds": lambda: config_snapshot()["tokenSlowDelaySeconds"],
+                        "note": "取令牌接口延迟返回，秒数由 /__admin/config 的 "
+                                "tokenSlowDelaySeconds 调整（缺省 %d）" % TOKEN_SLOW_DEFAULT_SECONDS}),
     ]
     return scenarios

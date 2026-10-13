@@ -37,7 +37,7 @@ class AuthScenarioTest(ProviderTestCase):
 
     def test_correct_credentials_return_all_items(self):
         scenarios = self._auth_scenarios()
-        self.assertEqual(23, len(scenarios), "A 类场景数量变了，请同步 README")
+        self.assertEqual(26, len(scenarios), "A 类场景数量变了，请同步 README")
         for entry in scenarios:
             with self.subTest(scenario=entry["name"]):
                 items = self._items(entry)

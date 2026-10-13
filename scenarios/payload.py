@@ -4,7 +4,8 @@
 覆盖：Query / 请求体原样回显（验证 `+`、中文、空格的编码）、记录路径命中单对象、
 业务成功码的多种写法、一个接口产出多个对象（嵌套数组子表）、
 验证接口带「无来源的必填参数」（路径参数 + required Query）、参数名带点号、
-公共参数（components.parameters + $ref）、根对象作为一条记录、表单请求体的业务 POST。
+公共参数（components.parameters + $ref）、根对象作为一条记录、表单请求体的业务 POST、
+两层嵌套数组、特殊字段名（连字符 / 中文 / 数字开头）。
 """
 
 from datetime import timedelta
@@ -497,6 +498,122 @@ def _scenario_form_body_post():
                     [ep], auth=NO_AUTH)
 
 
+# ==================== nested-two-level：两层嵌套数组 ====================
+
+_NTL_LINE_COUNTS = {1: 2, 2: 3, 3: 1}
+
+
+def _ntl_batches(line_no, i, j):
+    """批次条数公式：`(订单序号 + 行号) % 2 + 1`，取值 1~2 条"""
+    return [
+        {"batch_no": "%s-B%d" % (line_no, k), "qty": i + j + k,
+         "produced_on": iso(BASE_TIME + timedelta(days=i * 10 + j + k))[:10]}
+        for k in range(1, (i + j) % 2 + 2)
+    ]
+
+
+def _ntl_order(i):
+    order_no = "NTL-%05d" % i
+    lines = []
+    for j in range(1, _NTL_LINE_COUNTS[i] + 1):
+        line_no = "%s-L%d" % (order_no, j)
+        lines.append({"line_no": line_no, "sku": "SKU-%03d" % (i * 10 + j),
+                      "quantity": i + j, "unit_price": round(9.9 + j * 2.5, 2),
+                      "batches": _ntl_batches(line_no, i, j)})
+    return {"order_no": order_no, "customer": "客户%d" % i,
+            "amount": round(sum(x["quantity"] * x["unit_price"] for x in lines), 2),
+            "placed_at": iso(BASE_TIME + timedelta(days=i)),
+            "lines": lines}
+
+
+NTL_ORDERS = [_ntl_order(i) for i in (1, 2, 3)]
+NTL_LINE_TOTAL = sum(len(o["lines"]) for o in NTL_ORDERS)
+NTL_BATCH_TOTAL = sum(len(x["batches"]) for o in NTL_ORDERS for x in o["lines"])
+
+
+def _scenario_nested_two_level():
+    def handler(ctx):
+        return json_resp({"code": 0, "message": "ok",
+                          "data": {"items": NTL_ORDERS, "total": len(NTL_ORDERS)}})
+
+    ep = Endpoint(
+        "GET", "/orders", handler,
+        operation_id="listTwoLevelOrders", summary="查询订单（两层嵌套数组）",
+        description="每条订单有对象数组 lines（主键 line_no），每个 lines 元素里再有对象数组 batches"
+                    "（主键 batch_no）。共 %d 条订单、%d 条 lines、%d 条 batches，两层主键全局唯一"
+                    % (len(NTL_ORDERS), NTL_LINE_TOTAL, NTL_BATCH_TOTAL),
+        record_path="data.items", primary_key="order_no",
+        dataset=lambda: list(NTL_ORDERS), doc_sample={},
+        note="两层嵌套对象数组：lines（%d 条，主键 line_no）→ lines.batches（%d 条，主键 batch_no）"
+             % (NTL_LINE_TOTAL, NTL_BATCH_TOTAL),
+        extra_catalog={
+            "arrayFields": {"lines": "OBJECT_ARRAY", "lines.batches": "OBJECT_ARRAY"},
+            "nestedArrays": [
+                {"path": "lines", "primaryKey": "line_no", "expectedTotal": NTL_LINE_TOTAL,
+                 "countsPerParent": [len(o["lines"]) for o in NTL_ORDERS]},
+                {"path": "lines.batches", "primaryKey": "batch_no",
+                 "expectedTotal": NTL_BATCH_TOTAL,
+                 "countsPerParent": [len(x["batches"]) for o in NTL_ORDERS for x in o["lines"]]},
+            ]},
+    )
+    return Scenario("nested-two-level", "两层嵌套数组",
+                    "记录里的对象数组的元素再带一层对象数组，两层都有可作主键的字段",
+                    [ep], auth=NO_AUTH)
+
+
+# ==================== special-field-names：特殊字段名 ====================
+
+# 三个对象数组字段各占一种特殊命名（连字符 / 中文 / 数字开头），
+# 每个数组的三个子字段也是三种情形各一个；每个数组的第一个子字段是该数组的主键
+SFN_ARRAYS = [
+    ("sku-list", ["sku-code", "库存", "1st_price"]),
+    ("规格列表", ["spec-name", "取值", "2nd_unit"]),
+    ("3d_models", ["model-id", "格式", "3d_size"]),
+]
+
+
+def _sfn_product(i):
+    pid = "SFN-%05d" % i
+    return {
+        "id": pid, "name": "特殊字段商品%d" % i, "price": round(19.9 + i * 3.3, 2),
+        "sku-list": [{"sku-code": "%s-SKU%d" % (pid, j), "库存": i * 10 + j,
+                      "1st_price": round(5.5 + i + j * 0.25, 2)} for j in (1, 2)],
+        "规格列表": [{"spec-name": "%s-规格%d" % (pid, j), "取值": ["红色", "大号"][j - 1],
+                    "2nd_unit": ["件", "箱"][j - 1]} for j in (1, 2)],
+        "3d_models": [{"model-id": "%s-M%d" % (pid, j), "格式": ["glb", "obj"][j - 1],
+                       "3d_size": i * 100 + j} for j in (1, 2)],
+    }
+
+
+SFN_PRODUCTS = [_sfn_product(i) for i in (1, 2, 3)]
+
+
+def _scenario_special_field_names():
+    def handler(ctx):
+        return json_resp({"code": 0, "message": "ok",
+                          "data": {"items": SFN_PRODUCTS, "total": len(SFN_PRODUCTS)}})
+
+    names = "；".join("%s（子字段 %s）" % (name, "、".join(children)) for name, children in SFN_ARRAYS)
+    ep = Endpoint(
+        "GET", "/products", handler,
+        operation_id="listSpecialFieldNameProducts", summary="查询商品（数组字段与子字段名含特殊字符）",
+        description="每条记录有三个对象数组字段，字段名分别含连字符、中文、以数字开头，"
+                    "各自的子字段也是这三种情形各一个：%s。每个数组 2 条元素" % names,
+        record_path="data.items", primary_key="id",
+        dataset=lambda: list(SFN_PRODUCTS), doc_sample={},
+        note="特殊字段名：%s" % names,
+        extra_catalog={
+            "arrayFields": {name: "OBJECT_ARRAY" for name, _ in SFN_ARRAYS},
+            "nestedArrays": [
+                {"path": name, "primaryKey": children[0], "fields": list(children),
+                 "expectedTotal": sum(len(p[name]) for p in SFN_PRODUCTS)}
+                for name, children in SFN_ARRAYS]},
+    )
+    return Scenario("special-field-names", "特殊字段名",
+                    "数组字段及其子字段的名字含连字符、中文、以数字开头",
+                    [ep], auth=NO_AUTH)
+
+
 def build_scenarios():
     return [
         _scenario_echo(),
@@ -508,4 +625,6 @@ def build_scenarios():
         _scenario_shared_params(),
         _scenario_root_object_record(),
         _scenario_form_body_post(),
+        _scenario_nested_two_level(),
+        _scenario_special_field_names(),
     ]

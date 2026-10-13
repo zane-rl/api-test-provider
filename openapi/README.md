@@ -2,7 +2,7 @@
 
 > 由 `tools/export_openapi_by_auth.py` 生成，**勿手改**；改了场景后重跑该脚本。
 
-本目录把测试 API 提供服务的 46 个场景 / 91 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 文档，供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`，另有 `.yaml` / `.yml`）。
+本目录把测试 API 提供服务的 56 个场景 / 112 个端点按**鉴权类型**合并成几份 OpenAPI 3.0.3 文档，供其他项目一次读出某类鉴权下的全部接口，再逐个调用做测试。文档由场景注册表生成，与服务的实际行为一致（单场景文档见 `/s/<场景>/openapi.json`，另有 `.yaml` / `.yml`）。
 
 每份文档都提供 `.yaml` / `.yml` / `.json` 三种扩展名，内容等价：三个文件由同一个文档对象序列化而来，不是分别维护的。全部文档都是 OpenAPI 3.0.3；**不提供** Swagger 2.0 与 OpenAPI 3.1 的正常文档，这两种版本只有「应被拒绝」的反例（见文末）。
 
@@ -10,13 +10,13 @@
 
 | 鉴权类型 | 说明 | 静态文件 | 在线地址 | 场景 | 端点（DATA / TOKEN / FAULT） |
 |---|---|---|---|---|---|
-| `none` 无鉴权 | 不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里 | [`none.yaml`](none.yaml) · [`.yml`](none.yml) · [`.json`](none.json) | `http://127.0.0.1:18090/openapi/none.<yaml\|yml\|json>` | 22 | 45 / 0 / 10 |
-| `bearer` Bearer Token | 固定令牌，或先调登录接口取令牌再注入 Header / Query | [`bearer.yaml`](bearer.yaml) · [`.yml`](bearer.yml) · [`.json`](bearer.json) | `http://127.0.0.1:18090/openapi/bearer.<yaml\|yml\|json>` | 8 | 9 / 5 / 0 |
+| `none` 无鉴权 | 不需要任何凭证；分页、请求响应、依赖、故障、类型不一致类场景都在这里 | [`none.yaml`](none.yaml) · [`.yml`](none.yml) · [`.json`](none.json) | `http://127.0.0.1:18090/openapi/none.<yaml\|yml\|json>` | 29 | 60 / 0 / 10 |
+| `bearer` Bearer Token | 固定令牌，或先调登录接口取令牌再注入 Header / Query | [`bearer.yaml`](bearer.yaml) · [`.yml`](bearer.yml) · [`.json`](bearer.json) | `http://127.0.0.1:18090/openapi/bearer.<yaml\|yml\|json>` | 10 | 11 / 7 / 0 |
 | `apiKey` API Key | Header / Query / Cookie 三种位置，含前缀与附加鉴权参数 | [`apiKey.yaml`](apiKey.yaml) · [`.yml`](apiKey.yml) · [`.json`](apiKey.json) | `http://127.0.0.1:18090/openapi/apiKey.<yaml\|yml\|json>` | 7 | 7 / 0 / 0 |
 | `basic` HTTP Basic | 用户名 + 密码，含附加鉴权参数 | [`basic.yaml`](basic.yaml) · [`.yml`](basic.yml) · [`.json`](basic.json) | `http://127.0.0.1:18090/openapi/basic.<yaml\|yml\|json>` | 2 | 2 / 0 / 0 |
-| `oauth2` OAuth2 客户端凭证 | client_credentials；client_secret_post / basic、令牌按次数或按时间失效 | [`oauth2.yaml`](oauth2.yaml) · [`.yml`](oauth2.yml) · [`.json`](oauth2.json) | `http://127.0.0.1:18090/openapi/oauth2.<yaml\|yml\|json>` | 6 | 6 / 6 / 0 |
+| `oauth2` OAuth2 客户端凭证 | client_credentials；client_secret_post / basic、令牌按次数或按时间失效 | [`oauth2.yaml`](oauth2.yaml) · [`.yml`](oauth2.yml) · [`.json`](oauth2.json) | `http://127.0.0.1:18090/openapi/oauth2.<yaml\|yml\|json>` | 7 | 7 / 7 / 0 |
 | `fixedParam` 固定参数 | Header + Query + Cookie 三处同时带固定值 | [`fixedParam.yaml`](fixedParam.yaml) · [`.yml`](fixedParam.yml) · [`.json`](fixedParam.json) | `http://127.0.0.1:18090/openapi/fixedParam.<yaml\|yml\|json>` | 1 | 1 / 0 / 0 |
-| `all` 全部场景 | 全部鉴权类型 | [`all.yaml`](all.yaml) · [`.yml`](all.yml) · [`.json`](all.json) | `http://127.0.0.1:18090/openapi/all.<yaml\|yml\|json>` | 46 | 70 / 11 / 10 |
+| `all` 全部场景 | 全部鉴权类型 | [`all.yaml`](all.yaml) · [`.yml`](all.yml) · [`.json`](all.json) | `http://127.0.0.1:18090/openapi/all.<yaml\|yml\|json>` | 56 | 88 / 14 / 10 |
 
 ## 本地启动与获取文档
 
@@ -99,10 +99,21 @@ curl -s http://127.0.0.1:18090/__admin/scenarios | python3 -m json.tool   # 清�
 |  |  | `GET /s/shared-params/warehouses`<br>DATA |  | NONE | `data.items` | `id` | 3 |
 | **root-object-record** | 记录路径 = 根对象 → 1 条记录；标量数组与对象数组保留为字段 | `GET /s/root-object-record/order`<br>DATA | 无 | NONE | 根（空串） | `orderNo` | 1 |
 | **form-body-post** | 业务接口请求体为 application/x-www-form-urlencoded → 应标记为不支持 | `POST /s/form-body-post/orders/search`<br>DATA | 无 | NONE | `data.items` | `id` | 6 |
+| **nested-two-level** | 记录里的对象数组的元素再带一层对象数组，两层都有可作主键的字段 | `GET /s/nested-two-level/orders`<br>DATA | 无 | NONE | `data.items` | `order_no` | 3 |
+| **special-field-names** | 数组字段及其子字段的名字含连字符、中文、以数字开头 | `GET /s/special-field-names/products`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
 | **depend-path** | 前置依赖映射 × PATH；逐父记录条数不同 | `GET /s/depend-path/products`<br>DATA | 无 | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 1` | `data.items` | `sku` | 30 |
 |  |  | `GET /s/depend-path/products/{sku}/batches`<br>DATA |  | NONE | `data` | `batch_no` | 60 |
 | **depend-body** | 前置依赖映射 × BODY | `GET /s/depend-body/customers`<br>DATA | 无 | NONE | `data.items` | `id` | 12 |
 |  |  | `POST /s/depend-body/customer-orders/query`<br>DATA |  | NONE | `data.items` | `order_no` | 18 |
+| **required-header-cookie** | 业务参数位置 HEADER / COOKIE 且必填、无默认值；可绑定到前置接口的字段 | `GET /s/required-header-cookie/tenants`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /s/required-header-cookie/invoices`<br>DATA |  | NONE | `data.items` | `invoice_no` | 6 |
+|  |  | `GET /s/required-header-cookie/quotas`<br>DATA |  | NONE | `data.items` | `quota_id` | 4 |
+| **depend-empty-parent** | 依赖展开时前置接口成功但没有记录；下游直接带合法取值仍可正常调用 | `GET /s/depend-empty-parent/categories`<br>DATA | 无 | NONE | `data.items` | `id` | 0 |
+|  |  | `GET /s/depend-empty-parent/categories/{categoryId}/products`<br>DATA |  | NONE | `data.items` | `product_id` | 0 |
+| **depend-mixed-key** | 前置接口同一个取值字段有的记录是数字、有的是文本；只差类型的取值如何发起下游请求；一个下游的两个参数分别取自两个前置接口 | `GET /s/depend-mixed-key/shops`<br>DATA | 无 | NONE | `data.items` | `id` | 4 |
+|  |  | `GET /s/depend-mixed-key/shops/{ref}/staff`<br>DATA |  | NONE | `data.items` | `staff_no` | 5 |
+|  |  | `GET /s/depend-mixed-key/seasons`<br>DATA |  | NONE | `data.items` | `code` | 2 |
+|  |  | `GET /s/depend-mixed-key/sales`<br>DATA |  | NONE | `data.items` | `sale_id` | 6 |
 | **faults** | 错误处理策略、重试、限流、超时、非 JSON、截断、结构漂移、重定向 | `GET /s/faults/always-500`<br>FAULT | 无 | NONE | `data.items` | `id` | — |
 |  |  | `GET /s/faults/flaky`<br>FAULT |  | NONE | `data.items` | `id` | — |
 |  |  | `GET /s/faults/biz-error`<br>FAULT |  | NONE | `data.items` | `id` | — |
@@ -117,6 +128,10 @@ curl -s http://127.0.0.1:18090/__admin/scenarios | python3 -m json.tool   # 清�
 |  |  | `GET /s/depend-switchable/customers/{customerId}/orders`<br>DATA |  | NONE | `data.items` | `order_no` | 11 |
 |  |  | `GET /s/depend-switchable/orders/{orderNo}/items`<br>DATA |  | NONE | `data.items` | `item_no` | 16 |
 |  |  | `GET /s/depend-switchable/addresses`<br>DATA |  | NONE | `data.items` | `address_id` | 6 |
+| **depend-two-roots** | 下游的两个参数分别取自两个互不依赖的根接口；三个接口各自可切换正常 / 持续失败 | `GET /s/depend-two-roots/warehouses`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /s/depend-two-roots/periods`<br>DATA |  | NONE | `data.items` | `code` | 2 |
+|  |  | `GET /s/depend-two-roots/stock`<br>DATA |  | NONE | `data.items` | `stock_id` | 12 |
+| **page-fail-midway** | 页码分页取到第 3 页起失败；修复（切开关）后可完整取完 | `GET /s/page-fail-midway/records`<br>DATA | 无 | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 1` | `data.items` | `id` | 50 |
 | **type-mismatch** | 验证接口时把真实响应与已保存字段类型做兼容性比对：文档声明与实际返回故意不一致（全项目唯一，含 2 个不该判不兼容的负例与 1 个对照组） | `GET /s/type-mismatch/number-as-string`<br>DATA | 无 | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /s/type-mismatch/string-as-number`<br>DATA |  | NONE | `data.items` | `id` | 6 |
 |  |  | `GET /s/type-mismatch/bool-as-string`<br>DATA |  | NONE | `data.items` | `id` | 6 |
@@ -147,6 +162,10 @@ curl -s http://127.0.0.1:18090/__admin/scenarios | python3 -m json.tool   # 清�
 |  |  | `GET /s/token-json-body/items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 | **token-form-body** | 取 Token 接口只收 application/x-www-form-urlencoded；Token 在顶层 tokenValue | `POST /s/token-form-body/auth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /auth/token`，表单 `appKey=test-client&appSecret=test-secret`，取 `tokenValue` | NONE | — | 无 | — |
 |  |  | `GET /s/token-form-body/items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **token-typed-fields** | 取 Token 返回除令牌（文本）与有效期（整数）外还有布尔、小数字段；有效期路径的候选不应包含布尔字段 | `POST /s/token-typed-fields/login`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /login`，体 `{"username": "test", "password": "test-pass"}`，取 `data.accessToken` | NONE | — | 无 | — |
+|  |  | `GET /s/token-typed-fields/items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **token-slow** | 取 Token 接口校验通过后固定延迟若干秒再返回，验证取令牌期间的等待与超时提示 | `POST /s/token-slow/login`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /login`，体 `{"username": "test", "password": "test-pass"}`，取 `data.accessToken` | NONE | — | 无 | — |
+|  |  | `GET /s/token-slow/items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 
 快速验证（`B=http://127.0.0.1:18090`）：
 
@@ -173,6 +192,12 @@ curl -s "$B/s/token-json-body/items" -H "Authorization: Bearer $TOKEN"
 # token-form-body
 TOKEN=$(curl -s -X POST "$B/s/token-form-body/auth/token" -d appKey=test-client -d appSecret=test-secret | python3 -c 'import sys,json;print(json.load(sys.stdin)["tokenValue"])')
 curl -s "$B/s/token-form-body/items" -H "Authorization: Bearer $TOKEN"
+# token-typed-fields
+TOKEN=$(curl -s -X POST "$B/s/token-typed-fields/login" -H 'Content-Type: application/json' -d '{"username": "test", "password": "test-pass"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["accessToken"])')
+curl -s "$B/s/token-typed-fields/items" -H "Authorization: Bearer $TOKEN"
+# token-slow
+TOKEN=$(curl -s -X POST "$B/s/token-slow/login" -H 'Content-Type: application/json' -d '{"username": "test", "password": "test-pass"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["accessToken"])')
+curl -s "$B/s/token-slow/items" -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `apiKey` API Key — [`apiKey.yaml`](apiKey.yaml)
@@ -246,6 +271,8 @@ client_credentials；client_secret_post / basic、令牌按次数或按时间失
 |  |  | `GET /s/oauth2-paged-maxuses/items`<br>DATA |  | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 1` | `data.items` | `id` | 50 |
 | **oauth2-paged-expiring** | 一个批次内令牌临近过期：后端应主动重取，不应出现 401 | `POST /s/oauth2-paged-expiring/oauth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /oauth/token`，client_secret_post，`test-client` / `test-secret` | NONE | — | 无 | — |
 |  |  | `GET /s/oauth2-paged-expiring/items`<br>DATA |  | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 1` | `data.items` | `id` | 50 |
+| **oauth2-scope-required** | OAUTH2 授权范围：令牌请求必须带 scope=read，否则 400 invalid_scope | `POST /s/oauth2-scope-required/oauth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /oauth/token`，client_secret_post，`test-client` / `test-secret` | NONE | — | 无 | — |
+|  |  | `GET /s/oauth2-scope-required/items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 
 快速验证（`B=http://127.0.0.1:18090`）：
 
@@ -269,6 +296,9 @@ curl -s "$B/s/oauth2-paged-maxuses/items" -H "Authorization: Bearer $TOKEN"
 # oauth2-paged-expiring
 TOKEN=$(curl -s -X POST "$B/s/oauth2-paged-expiring/oauth/token" -d grant_type=client_credentials -d client_id=test-client -d client_secret=test-secret -d scope=read | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
 curl -s "$B/s/oauth2-paged-expiring/items" -H "Authorization: Bearer $TOKEN"
+# oauth2-scope-required
+TOKEN=$(curl -s -X POST "$B/s/oauth2-scope-required/oauth/token" -d grant_type=client_credentials -d client_id=test-client -d client_secret=test-secret -d scope=read | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -s "$B/s/oauth2-scope-required/items" -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `fixedParam` 固定参数 — [`fixedParam.yaml`](fixedParam.yaml)

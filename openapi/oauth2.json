@@ -3,7 +3,7 @@
   "info": {
     "title": "测试 API 提供服务 · 鉴权：OAuth2 客户端凭证",
     "version": "1.0.0",
-    "description": "按鉴权类型合并的测试接口文档：client_credentials；client_secret_post / basic、令牌按次数或按时间失效（6 个场景 / 12 个端点）。\n\n- 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。\n- 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。\n- x-test.role：DATA 业务接口 / TOKEN 登录与令牌接口（不要当数据接口调）/ FAULT 故障注入。\n- 每次测试前 POST http://127.0.0.1:18090/__admin/reset?scenario=<场景> 复位，调用后查 http://127.0.0.1:18090/__admin/requests。"
+    "description": "按鉴权类型合并的测试接口文档：client_credentials；client_secret_post / basic、令牌按次数或按时间失效（7 个场景 / 14 个端点）。\n\n- 每个场景一个 tag；tag 的 x-auth 是该场景的测试凭证与令牌流程。\n- 鉴权挂在每个 operation 的 security 上，scheme 名为 <场景>.<原名>。\n- x-test.role：DATA 业务接口 / TOKEN 登录与令牌接口（不要当数据接口调）/ FAULT 故障注入。\n- 每次测试前 POST http://127.0.0.1:18090/__admin/reset?scenario=<场景> 复位，调用后查 http://127.0.0.1:18090/__admin/requests。"
   },
   "servers": [
     {
@@ -228,6 +228,41 @@
         }
       },
       "x-openapi-url": "http://127.0.0.1:18090/s/oauth2-paged-expiring/openapi.json"
+    },
+    {
+      "name": "oauth2-scope-required",
+      "description": "OAuth2（令牌接口校验授权范围）（A 鉴权）：OAUTH2 授权范围：令牌请求必须带 scope=read，否则 400 invalid_scope",
+      "x-auth": {
+        "type": "oauth2",
+        "credentials": [
+          {
+            "in": "HEADER",
+            "name": "Authorization",
+            "testValue": "<由令牌接口签发>",
+            "prefix": "Bearer"
+          }
+        ],
+        "extraAuthParams": [],
+        "tokenFlow": {
+          "kind": "OAUTH2_CLIENT_CREDENTIALS",
+          "method": "POST",
+          "grantType": "client_credentials",
+          "clientAuthMethod": "post",
+          "clientId": "test-client",
+          "clientSecret": "test-secret",
+          "scope": "read",
+          "tokenPath": "access_token",
+          "expiresInPath": "expires_in",
+          "inject": {
+            "in": "HEADER",
+            "name": "Authorization",
+            "prefix": "Bearer"
+          },
+          "note": "令牌接口只接受 scope=read：不带、为空或带别的值返回 400，错误体 {\"error\": \"invalid_scope\", \"error_description\": ...}；业务接口不再校验 scope",
+          "url": "http://127.0.0.1:18090/s/oauth2-scope-required/oauth/token"
+        }
+      },
+      "x-openapi-url": "http://127.0.0.1:18090/s/oauth2-scope-required/openapi.json"
     }
   ],
   "paths": {
@@ -1874,6 +1909,269 @@
           "note": "期望：令牌端点被请求 2 次、5 次业务请求全部 200、无任何 401、最终 50 条无重复。5 页的发起时刻为 0/6/12/18/24 秒，第 4 页发起前已过 18 秒（>17.5 的复用窗口）应触发主动重取；全程 30 秒短于有效期 35 秒，所以「无 401」只可能来自主动重取，不是撞 401 后重放"
         }
       }
+    },
+    "/s/oauth2-scope-required/oauth/token": {
+      "post": {
+        "operationId": "oauth2ScopeRequired_issueToken",
+        "summary": "签发 OAuth2 访问令牌（写操作，不要勾选为数据接口）",
+        "description": "客户端认证方式 client_secret_post：凭证放表单体；带 Authorization 头会返回 400；scope 必填且必须恰好是 read，不带、为空或带别的值返回 400 {\"error\": \"invalid_scope\"}",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "type": "string"
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    },
+                    "scope": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "access_token": "oat-oauth2-scope-required-1",
+                  "token_type": "Bearer",
+                  "expires_in": 3600,
+                  "scope": "read"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误响应（参数、鉴权或业务错误）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "grant_type",
+                  "client_id",
+                  "client_secret",
+                  "scope"
+                ],
+                "properties": {
+                  "grant_type": {
+                    "type": "string",
+                    "example": "client_credentials"
+                  },
+                  "client_id": {
+                    "type": "string",
+                    "example": "test-client"
+                  },
+                  "client_secret": {
+                    "type": "string",
+                    "example": "test-secret"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "example": "read"
+                  }
+                }
+              },
+              "example": {
+                "grant_type": "client_credentials",
+                "client_id": "test-client",
+                "client_secret": "test-secret",
+                "scope": "read"
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-original-operation-id": "issueToken",
+        "tags": [
+          "oauth2-scope-required"
+        ],
+        "x-scenario": "oauth2-scope-required",
+        "x-auth-type": "oauth2",
+        "x-test": {
+          "role": "TOKEN",
+          "paginationType": "NONE",
+          "pagination": {},
+          "recordPath": null,
+          "primaryKey": null,
+          "expectedTotal": null,
+          "requiresAuth": false
+        }
+      }
+    },
+    "/s/oauth2-scope-required/items": {
+      "get": {
+        "operationId": "oauth2ScopeRequired_listItems",
+        "summary": "查询数据项列表",
+        "description": "读取数据项，不分页，一次返回全部 20 条",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "integer"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "category": {
+                                "type": "string"
+                              },
+                              "price": {
+                                "type": "number"
+                              },
+                              "quantity": {
+                                "type": "integer"
+                              },
+                              "active": {
+                                "type": "boolean"
+                              },
+                              "updated_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "remark": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "spec": {
+                                "type": "object",
+                                "properties": {
+                                  "length": {
+                                    "type": "number"
+                                  },
+                                  "width": {
+                                    "type": "number"
+                                  },
+                                  "unit": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "code": 0,
+                  "message": "ok",
+                  "data": {
+                    "items": [
+                      {
+                        "id": "OAUTH2-SCOPE-REQUIRED-00001",
+                        "name": "OAUTH2-SCOPE-REQUIRED物料1",
+                        "category": "整机",
+                        "price": 11.27,
+                        "quantity": 13,
+                        "active": true,
+                        "updated_at": "2026-01-01T09:00:00+08:00",
+                        "remark": "备注1",
+                        "spec": {
+                          "length": 11.5,
+                          "width": 6.25,
+                          "unit": "cm"
+                        }
+                      },
+                      {
+                        "id": "OAUTH2-SCOPE-REQUIRED-00002",
+                        "name": "OAUTH2-SCOPE-REQUIRED物料2",
+                        "category": "配件",
+                        "price": 12.64,
+                        "quantity": 26,
+                        "active": true,
+                        "updated_at": "2026-01-01T10:00:00+08:00",
+                        "remark": "备注2",
+                        "spec": {
+                          "length": 12.5,
+                          "width": 7.25,
+                          "unit": "cm"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误响应（参数、鉴权或业务错误）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "凭证缺失或错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-original-operation-id": "listItems",
+        "tags": [
+          "oauth2-scope-required"
+        ],
+        "security": [
+          {
+            "oauth2-scope-required.tokenAuth": []
+          }
+        ],
+        "x-scenario": "oauth2-scope-required",
+        "x-auth-type": "oauth2",
+        "x-test": {
+          "role": "DATA",
+          "paginationType": "NONE",
+          "pagination": {},
+          "recordPath": "data.items",
+          "primaryKey": "id",
+          "expectedTotal": 20,
+          "requiresAuth": true
+        }
+      }
     }
   },
   "components": {
@@ -1963,6 +2261,18 @@
         "flows": {
           "clientCredentials": {
             "tokenUrl": "http://127.0.0.1:18090/s/oauth2-paged-expiring/oauth/token",
+            "scopes": {
+              "read": "只读"
+            }
+          }
+        },
+        "description": "客户端凭证模式，客户端认证方式 client_secret_post"
+      },
+      "oauth2-scope-required.tokenAuth": {
+        "type": "oauth2",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "http://127.0.0.1:18090/s/oauth2-scope-required/oauth/token",
             "scopes": {
               "read": "只读"
             }

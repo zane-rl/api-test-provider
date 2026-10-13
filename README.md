@@ -59,12 +59,14 @@ server.py                   HTTP 处理、路由、请求日志、/health、/__a
 scenarios/
   common.py                 Ctx/Resp/ApiError、鉴权模型、Endpoint/Scenario、造数、令牌仓库、schema 推断
   openapi.py                由注册表动态生成 OpenAPI 3.0 文档（Swagger 2.0 转换器只给反例文档用）
-  auth.py                   A 鉴权（23 个场景）
+  auth.py                   A 鉴权（26 个场景）
   pagination.py             B 分页（9 个场景）
-  payload.py                C 请求与响应（9 个场景）
-  depend.py                 D 依赖（2 个场景）
-  faults.py                 E 故障（2 个场景：faults，以及由它一并注册的 depend-switchable）
+  payload.py                C 请求与响应（11 个场景）
+  depend.py                 D 依赖（5 个场景）
+  faults.py                 E 故障（4 个场景：faults，以及由它一并注册的 depend-switchable、depend-two-roots、page-fail-midway）
   switchable.py             depend-switchable：分支依赖 + 按接口切换持续失败的开关与调用计数
+  faultcases.py             depend-two-roots（一个下游依赖两个根）、page-fail-midway（分页第 3 页起失败）
+  faultswitch.py            通用的按接口故障开关与调用计数（SwitchBoard），/__admin/faults 按场景名分发到这里
   typemismatch.py           F 类型不一致（1 个场景，**唯一手写 schema 的地方**）
   negative.py               反例文档：Swagger 2.0 / OpenAPI 3.1.0（应被后端拒绝，不计入场景数）
   bundle.py                 按鉴权类型合并的 OpenAPI（由单场景文档改名合并而来）
@@ -99,13 +101,13 @@ tests/                      标准库 unittest
 
 | 鉴权类型 | 场景数 | 静态文件 | 在线地址 |
 |---|---|---|---|
-| `none` 无鉴权 | 22 | `openapi/none.yaml` | `/openapi/none.yaml` |
-| `bearer` | 8 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
+| `none` 无鉴权 | 29 | `openapi/none.yaml` | `/openapi/none.yaml` |
+| `bearer` | 10 | `openapi/bearer.yaml` | `/openapi/bearer.yaml` |
 | `apiKey` | 7 | `openapi/apiKey.yaml` | `/openapi/apiKey.yaml` |
 | `basic` | 2 | `openapi/basic.yaml` | `/openapi/basic.yaml` |
-| `oauth2` | 6 | `openapi/oauth2.yaml` | `/openapi/oauth2.yaml` |
+| `oauth2` | 7 | `openapi/oauth2.yaml` | `/openapi/oauth2.yaml` |
 | `fixedParam` | 1 | `openapi/fixedParam.yaml` | `/openapi/fixedParam.yaml` |
-| 全部 | 46 | `openapi/all.yaml` | `/openapi/all.yaml` |
+| 全部 | 56 | `openapi/all.yaml` | `/openapi/all.yaml` |
 
 - 每份文档都有 `.yaml` / `.yml` / `.json` 三种扩展名（静态文件与在线地址都是，表里只列了 `.yaml`），内容等价；
   在线文档的 `servers` 跟随实际端口，静态文件的 `servers` 固定为 `http://127.0.0.1:18090`。
@@ -164,6 +166,12 @@ tests/                      标准库 unittest
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 | **token-form-body** | 取 Token 接口只收 application/x-www-form-urlencoded；Token 在顶层 tokenValue | `POST /auth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /auth/token`，表单 `appKey=test-client&appSecret=test-secret`，取 `tokenValue` | NONE | — | 无 | — |
 |  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **token-typed-fields** | 取 Token 返回除令牌（文本）与有效期（整数）外还有布尔、小数字段；有效期路径的候选不应包含布尔字段 | `POST /login`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /login`，体 `{"username": "test", "password": "test-pass"}`，取 `data.accessToken` | NONE | — | 无 | — |
+|  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **oauth2-scope-required** | OAUTH2 授权范围：令牌请求必须带 scope=read，否则 400 invalid_scope | `POST /oauth/token`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /oauth/token`，client_secret_post，`test-client` / `test-secret` | NONE | — | 无 | — |
+|  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
+| **token-slow** | 取 Token 接口校验通过后固定延迟若干秒再返回，验证取令牌期间的等待与超时提示 | `POST /login`<br>TOKEN | HEADER `Authorization` = `<由令牌接口签发>`<br>令牌：`POST /login`，体 `{"username": "test", "password": "test-pass"}`，取 `data.accessToken` | NONE | — | 无 | — |
+|  |  | `GET /items`<br>DATA |  | NONE | `data.items` | `id` | 20 |
 
 #### B 分页
 
@@ -203,6 +211,8 @@ tests/                      标准库 unittest
 |  |  | `GET /warehouses`<br>DATA |  | NONE | `data.items` | `id` | 3 |
 | **root-object-record** | 记录路径 = 根对象 → 1 条记录；标量数组与对象数组保留为字段 | `GET /order`<br>DATA | 无 | NONE | 根（空串） | `orderNo` | 1 |
 | **form-body-post** | 业务接口请求体为 application/x-www-form-urlencoded → 应标记为不支持 | `POST /orders/search`<br>DATA | 无 | NONE | `data.items` | `id` | 6 |
+| **nested-two-level** | 记录里的对象数组的元素再带一层对象数组，两层都有可作主键的字段 | `GET /orders`<br>DATA | 无 | NONE | `data.items` | `order_no` | 3 |
+| **special-field-names** | 数组字段及其子字段的名字含连字符、中文、以数字开头 | `GET /products`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
 
 #### D 依赖
 
@@ -212,6 +222,15 @@ tests/                      标准库 unittest
 |  |  | `GET /products/{sku}/batches`<br>DATA |  | NONE | `data` | `batch_no` | 60 |
 | **depend-body** | 前置依赖映射 × BODY | `GET /customers`<br>DATA | 无 | NONE | `data.items` | `id` | 12 |
 |  |  | `POST /customer-orders/query`<br>DATA |  | NONE | `data.items` | `order_no` | 18 |
+| **required-header-cookie** | 业务参数位置 HEADER / COOKIE 且必填、无默认值；可绑定到前置接口的字段 | `GET /tenants`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /invoices`<br>DATA |  | NONE | `data.items` | `invoice_no` | 6 |
+|  |  | `GET /quotas`<br>DATA |  | NONE | `data.items` | `quota_id` | 4 |
+| **depend-empty-parent** | 依赖展开时前置接口成功但没有记录；下游直接带合法取值仍可正常调用 | `GET /categories`<br>DATA | 无 | NONE | `data.items` | `id` | 0 |
+|  |  | `GET /categories/{categoryId}/products`<br>DATA |  | NONE | `data.items` | `product_id` | 0 |
+| **depend-mixed-key** | 前置接口同一个取值字段有的记录是数字、有的是文本；只差类型的取值如何发起下游请求；一个下游的两个参数分别取自两个前置接口 | `GET /shops`<br>DATA | 无 | NONE | `data.items` | `id` | 4 |
+|  |  | `GET /shops/{ref}/staff`<br>DATA |  | NONE | `data.items` | `staff_no` | 5 |
+|  |  | `GET /seasons`<br>DATA |  | NONE | `data.items` | `code` | 2 |
+|  |  | `GET /sales`<br>DATA |  | NONE | `data.items` | `sale_id` | 6 |
 
 #### E 故障
 
@@ -231,6 +250,10 @@ tests/                      标准库 unittest
 |  |  | `GET /customers/{customerId}/orders`<br>DATA |  | NONE | `data.items` | `order_no` | 11 |
 |  |  | `GET /orders/{orderNo}/items`<br>DATA |  | NONE | `data.items` | `item_no` | 16 |
 |  |  | `GET /addresses`<br>DATA |  | NONE | `data.items` | `address_id` | 6 |
+| **depend-two-roots** | 下游的两个参数分别取自两个互不依赖的根接口；三个接口各自可切换正常 / 持续失败 | `GET /warehouses`<br>DATA | 无 | NONE | `data.items` | `id` | 3 |
+|  |  | `GET /periods`<br>DATA |  | NONE | `data.items` | `code` | 2 |
+|  |  | `GET /stock`<br>DATA |  | NONE | `data.items` | `stock_id` | 12 |
+| **page-fail-midway** | 页码分页取到第 3 页起失败；修复（切开关）后可完整取完 | `GET /records`<br>DATA | 无 | PAGE_NUMBER<br>`page(QUERY)` `page_size(QUERY)` `起始 1` | `data.items` | `id` | 50 |
 
 #### F 类型不一致
 
@@ -343,6 +366,12 @@ tests/                      标准库 unittest
 | `depend-switchable` `GET /customers/{customerId}/orders` | `序号 % 3 + 1`，序号取自 `SWC-000NN` | 1~3 条 | 5 个客户共 **11** 条 |
 | `depend-switchable` `GET /orders/{orderNo}/items` | `(客户序号 + 订单行号) % 2 + 1`，取自 `SWC-000NN-O<行号>` | 1~2 条 | 11 张订单共 **16** 条 |
 | `depend-switchable` `GET /addresses?customer_id=` | `(序号 * 2) % 3`，序号取自 `SWC-000NN` | 0~2 条 | 5 个客户共 **6** 条 |
+| `required-header-cookie` `GET /invoices`（请求头 `X-Tenant-Id`） | 三个租户依次 `2 / 1 / 3` | 1~3 条 | 3 个租户共 **6** 条 |
+| `required-header-cookie` `GET /quotas`（Cookie `region`） | 三个区域依次 `1 / 2 / 1` | 1~2 条 | 3 个区域共 **4** 条 |
+| `depend-empty-parent` `GET /categories/{categoryId}/products` | 每个合法取值恒定 2 条 | 2 条 | 前置 0 条，按依赖展开共 **0** 条 |
+| `depend-mixed-key` `GET /shops/{ref}/staff` | 取值 `1` → 2 条、`2` → 1 条、`3` → 2 条 | 1~2 条 | 3 个不同取值共 **5** 条（参考值） |
+| `depend-mixed-key` `GET /sales?shop_ref=&season=` | 每个（取值, 季）组合恒定 1 条 | 1 条 | 两两组合共 **6** 条（参考值） |
+| `depend-two-roots` `GET /stock?warehouse_id=&period=` | 每个（仓库, 期间）组合恒定 2 条 | 2 条 | 两两组合共 **12** 条（参考值） |
 
 前 5 个父记录的条数分别是 `2 / 4 / 1 / 3 / 0` 与 `3 / 2 / 1 / 0 / 3`——有 0 条的父记录，用来验证空结果不算失败。
 `sku` 不存在返回 404；`customerId` 缺失返回 400，不存在则返回空列表。
@@ -382,6 +411,80 @@ tests/                      标准库 unittest
   不带场景名的全量复位同样会还原。复位别的场景不动它。
 - 文档与开关状态无关：生成文档时跳过开关与计数，接口处在持续失败时取到的文档也不变。
 
+### H-VERIFY-1013 补测场景（10 个）
+
+为了在页面上补验「只有用例为证」的事项而加，都是现有场景造不出条件的情形。
+
+**鉴权（A 组）**
+
+- `token-typed-fields`：鉴权同 `bearer-request`（同一组账号密码，令牌放 `Authorization: Bearer`）。
+  `POST /login` 的返回除 `data.accessToken`（文本）、`data.expiresIn`（整数 3600）、`data.tokenType`（文本）外，
+  多了布尔字段 `success`（顶层）、`data.refreshable` 与小数字段 `data.refreshRatio`（0.8）。
+  清单 `tokenFlow.nonTextTokenResponseFields` 按类型列出这些字段。用于验「有效期路径的候选不包含布尔字段」。
+- `oauth2-scope-required`：客户端凭证同 `oauth2-post`（`client_secret_post`）。令牌接口 `POST /oauth/token`
+  **只接受 `scope=read`**：不带、为空、带别的值（`write`、`read write`、`READ`）一律 400，错误体
+  `{"error": "invalid_scope", "error_description": "..."}`。校验顺序是 `grant_type` → 客户端凭证（错了 401
+  `invalid_client`）→ `scope`。业务接口 `/items` 只校验令牌，不再看 scope。其余 6 个 `oauth2-*` 场景仍然不校验 scope。
+- `token-slow`：鉴权同 `bearer-request`。`POST /login` 校验通过后**延迟 5 秒**再返回（返回形状与 `bearer-request` 相同）；
+  账号密码错误立即 401、不延迟；业务接口与取文档不延迟。秒数是配置项 `tokenSlowDelaySeconds`（0~60），
+  `/__admin/config` 可改，清单 `tokenFlow.tokenDelaySeconds` 反映当前值。
+
+**请求与响应（C 组）**
+
+- `nested-two-level`：`GET /orders` 返回 3 条订单（主键 `order_no`）。每条订单有对象数组 `lines`（主键 `line_no`，
+  各订单 `2 / 3 / 1` 共 6 条），每个 `lines` 元素里再有对象数组 `batches`（主键 `batch_no`，每行 1~2 条共 9 条）。
+  两层主键全局唯一。清单 `nestedArrays` 给出两层的路径、主键与条数。
+- `special-field-names`：`GET /products` 返回 3 条（主键 `id`）。每条记录有三个对象数组字段，字段名与子字段名
+  各占连字符 / 中文 / 数字开头三种情形（每个数组的第一个子字段是元素主键，每个数组 2 条元素、共 6 条）：
+
+  | 数组字段 | 子字段 |
+  |---|---|
+  | `sku-list` | `sku-code`、`库存`、`1st_price` |
+  | `规格列表` | `spec-name`、`取值`、`2nd_unit` |
+  | `3d_models` | `model-id`、`格式`、`3d_size` |
+
+**依赖（D 组）**
+
+- `required-header-cookie`：前置 `GET /tenants`（3 条，`id` 为 `RHC-00001` ~ `RHC-00003`，`region` 各不相同）。
+  `GET /invoices` 需要**必填请求头** `X-Tenant-Id`（取自 `/tenants` 的 `id`），`GET /quotas` 需要**必填 Cookie**
+  `region`（取自 `/tenants` 的 `region`）。文档里两个参数都是 `required: true`，不给 `default` 与 `example`；
+  缺失或为空返回 400，放错位置（比如把 Cookie 参数放进 Query）也算缺失；不认识的取值返回空列表。
+- `depend-empty-parent`：前置 `GET /categories` **恒定返回 0 条**。因为空数组推断不出字段，它的记录结构
+  （`id`、`name`）在 schema 里显式声明，文档的响应示例带一条示意记录——**示例只为示意字段，真实响应没有记录**。
+  下游 `GET /categories/{categoryId}/products` 直接带合法取值（`DEP-CAT-00001` ~ `DEP-CAT-00003`，
+  清单 `validPathValues`）调用时各返回 2 条，其它取值 404。
+- `depend-mixed-key`：前置 `GET /shops` 的取值字段 `ref` 依次是数字 `1`、文本 `"1"`、数字 `2`、文本 `"3"`
+  ——**数字 1 与文本 "1" 是同一个取值的两种类型**，文档里 `ref` 声明为 `oneOf` 整数 / 文本。
+  `GET /shops/{ref}/staff` 按取值返回（`1` → 2 条、`2` → 1 条、`3` → 2 条，其它 404）：3 个不同取值各调一次共 5 条；
+  若按 4 条父记录各调一次共返回 7 条，其中取值 `1` 的 2 条主键重复。清单 `referenceTotals` 两个数都给。
+  另有前置 `GET /seasons`（`code` 为 `S1` / `S2`）与下游 `GET /sales?shop_ref=&season=`：两个必填查询参数分别取自
+  `/shops` 的 `ref` 与 `/seasons` 的 `code`，缺任一个 400，每个组合 1 条。
+
+**故障（E 组，带开关）**
+
+- `depend-two-roots`：两个互不依赖的根 `GET /warehouses`（3 条，主键 `id`）、`GET /periods`（2 条，主键 `code`），
+  下游 `GET /stock?warehouse_id=&period=` 的两个必填查询参数分别取自它们，缺任一个 400（消息写明缺哪个），
+  每个组合恒定 2 条。三个接口各有一个开关（键 `warehouses` / `periods` / `stock`），缺省正常，
+  用法与 `depend-switchable` 完全相同，入口是 `/__admin/faults?scenario=depend-two-roots`。
+- `page-fail-midway`：**不是正常场景**。`GET /records` 页码分页（`page` / `page_size`，共 50 条 5 页），
+  **缺省状态下第 1、2 页正常，第 3 页起恒定返回 500**，一次完整同步必然中途失败（失败前取到 20 条）。
+  开关键 `records`，入口 `/__admin/faults?scenario=page-fail-midway`：
+
+  ```bash
+  # 切到 normal：5 页全部正常（验修复后恢复）
+  curl -s -X POST 'http://127.0.0.1:18090/__admin/faults?scenario=page-fail-midway' \
+       -H 'Content-Type: application/json' -d '{"endpoint":"records","mode":"normal"}'
+  # 切回第 3 页起失败（status 可设 400~599，缺省 500）
+  curl -s -X POST 'http://127.0.0.1:18090/__admin/faults?scenario=page-fail-midway' \
+       -H 'Content-Type: application/json' -d '{"endpoint":"records","mode":"fail"}'
+  ```
+
+  它与另两个带开关的场景相反：**缺省是失败**，`POST /__admin/reset?scenario=page-fail-midway` 与全量复位都会回到
+  「第 3 页起失败」。清单的 `expectedTotal`（50）是切到 normal 之后的条数，另有 `rowsBeforeFailure`（20）。
+
+上面依赖类场景里标「参考值」的合计，只说明「服务对每种参数取值各返回什么」时按某种调用方式算出来的数，
+**不代表后端应该怎么组合、去重**——那正是要验的东西。
+
 ### 记录的字段形态
 
 每条记录固定覆盖七种形态，供后端的字段类型推断 / 对象展开 / 主键解析取材：
@@ -409,12 +512,12 @@ tests/                      标准库 unittest
 | `GET /health` | `{"status":"ok"}` |
 | `GET /__admin/scenarios` | 全部场景清单：文档地址（`openapiUrl` 与三种扩展名的 `openapiUrls`）、顶层 `negativeDocuments`（反例文档）、鉴权方式与测试凭证（含 `prefix` / `extraAuthParams` / `tokenFlow`）、每个端点的 `method` / `path` / `role` / `paginationType` / 分页参数名与位置 / `recordPath` / `primaryKey` / `expectedTotal` / `sampleFirst3` |
 | `GET /__admin/requests?scenario=<名字>&limit=<N>` | 服务端实际收到的请求日志，按时间顺序；含序号、方法、路径、解码后的 Query、`rawQuery`、全部请求头、Cookie、原始请求体、响应状态码。内存最多保留最近 5000 条 |
-| `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、`depend-switchable` 的故障开关与调用计数、已签发令牌与令牌序号。**不改 config** |
-| `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位，故障开关与调用计数只在 `scenario=depend-switchable` 时还原。场景名不存在返回 404 |
-| `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 6；0 表示不延迟，自测靠它跑快） |
-| `GET /__admin/faults?scenario=depend-switchable` | 该场景四个接口的故障开关（`mode` / `failStatus`）与自上次复位以来的调用次数（`calls.total` / `succeeded` / `failed`） |
-| `POST /__admin/faults?scenario=depend-switchable` | 切换开关：体为 `{"endpoint": 开关键, "mode": "normal" \| "fail", "status": 状态码}` 或 `{"switches": [...]}`；`status` 缺省 503、可设 400~599；有一项不合法整体返回 400。缺 `scenario` 返回 400，场景没有开关返回 404 |
-| `GET /__admin/state` | 当前配置、故障计数器、`depend-switchable` 的故障开关（`faultSwitches`）、已签发令牌快照（排查用） |
+| `POST /__admin/reset` | 全量复位：清空请求日志，复位 `flaky` / `rate-limit` 计数器、全部带开关场景（`depend-switchable` / `depend-two-roots` / `page-fail-midway`）的故障开关与调用计数、已签发令牌与令牌序号。**不改 config** |
+| `POST /__admin/reset?scenario=<名字>` | 只复位该场景：清掉它的请求日志（其它场景的保留，序号不归零）、作废它签发的令牌；故障计数器只在 `scenario=faults` 时复位，故障开关与调用计数只在复位带开关的场景自己时还原（`page-fail-midway` 还原后是「第 3 页起失败」）。场景名不存在返回 404 |
+| `GET/POST /__admin/config` | 读取 / 调整可变参数，改完 `/__admin/scenarios` 立刻反映新值。键与取值范围：`oauth2BasicTokenMaxUses`（1~1000，默认 2）、`oauth2ExpiringTokenTtlSeconds`（1~3600，默认 40）、`oauth2PagedTokenMaxUses`（1~1000，默认 2）、`oauth2PagedTtlSeconds`（1~3600，默认 35）、`oauth2PagedDelaySeconds`（**0**~60，默认 6；0 表示不延迟，自测靠它跑快）、`tokenSlowDelaySeconds`（**0**~60，默认 5；`token-slow` 取令牌接口的延迟秒数） |
+| `GET /__admin/faults?scenario=<场景>` | 带开关的场景有三个：`depend-switchable`、`depend-two-roots`、`page-fail-midway`。返回该场景各接口的故障开关（`mode` / `failStatus`）与自上次复位以来的调用次数（`calls.total` / `succeeded` / `failed`） |
+| `POST /__admin/faults?scenario=<场景>` | 切换开关：体为 `{"endpoint": 开关键, "mode": "normal" \| "fail", "status": 状态码}` 或 `{"switches": [...]}`；`status` 缺省 503（`page-fail-midway` 缺省 500）、可设 400~599；有一项不合法整体返回 400。缺 `scenario` 返回 400，场景没有开关返回 404 |
+| `GET /__admin/state` | 当前配置、故障计数器、`depend-switchable` 的故障开关（`faultSwitches`）、全部带开关场景按场景名分组的开关（`faultSwitchesByScenario`）、已签发令牌快照（排查用） |
 | `GET /openapi/<鉴权类型\|all>.yaml` / `.yml` / `.json` | 按鉴权类型合并的 OpenAPI 文档（见上文），同样不记日志；`/__admin/scenarios` 的 `openapiBundles`（`.yaml`）与 `openapiBundleUrls`（三种扩展名）列出全部地址 |
 
 鉴权描述的结构（`/__admin/scenarios` → `scenarios[].auth`）：
@@ -486,8 +589,9 @@ tests/                      标准库 unittest
   `/__admin/config` 的配置项（`oauth2BasicTokenMaxUses` / `oauth2ExpiringTokenTtlSeconds`）、
   以及故障场景那几个计数器（它们本就只属于 `faults`）。所以：
   **改配置或跑 `faults` 场景的用例必须独占实例或串行**，其余场景并发跑没问题。
-  `depend-switchable` 的故障开关与调用计数也是进程级的：两拨人同时用这个场景会互相切开关，
+  `depend-switchable`、`depend-two-roots`、`page-fail-midway` 的故障开关与调用计数也是进程级的（每个场景各一份）：两拨人同时用同一个场景会互相切开关，
   而且别人做不带场景名的全量复位会把正在「持续失败」的接口切回正常。
+  （`page-fail-midway` 相反：复位会让它回到缺省的「第 3 页起失败」。）
 - 令牌有两种失效方式：按**使用次数**（`oauth2-basic`、`oauth2-paged-maxuses`，可复现）与按**时间**
   （`oauth2-expiring`、`oauth2-paged-expiring`）。其余场景的令牌不失效，`expires_in` 恒为 3600。
 - `oauth2-paged-expiring` 的每页延迟默认 6 秒（一次完整同步约 30 秒）：跑它的用例会慢，
@@ -515,3 +619,4 @@ tests/                      标准库 unittest
 | 2026-10-08 | H-SC2：新增 `dotted-param` 场景（C 组，API Key 请求头鉴权，仅 1 个端点 `GET /items`），Query 参数名本身带点号：必填 `filter.name`、可选整数 `page.size`，均无 example / default；记录回显 `filterName` / `pageSize`，缺或空 `filter.name` 返回 400；清单给 `requiredTestValues`。39 个场景 / 76 个端点 / 151 条自测。 |
 | 2026-10-08 | H-1008：按当日需求更新新增 6 个场景 / 11 个端点：`shared-params`（公共参数 `components.parameters` + `$ref`，操作级 / 路径项级两种引用位置，内联同名与重复参数作对照）、`token-json-body` / `token-form-body`（取 Token 接口只认一种请求体类型，另一种返回 415；Token 路径 `data.token.value` / 顶层 `tokenValue`）、`next-link-only`（只能跟随 `next` 完整地址翻页，35 条 4 页）、`root-object-record`（根对象即一条记录，含标量数组与对象数组）、`form-body-post`（表单请求体的业务 POST）；清单新增 `sharedParameters` / `arrayFields` / `expectedBackendSupport`。**文档格式**：所有文档提供 `.json` / `.yaml` / `.yml` 三种扩展名（同一文档对象序列化），清单新增 `openapiUrls` / `openapiBundleUrls`；`apikey-header` / `page-number` 不再提供 Swagger 2.0，清单移除 `swagger2Url`；新增不计入场景数的反例文档 `/__negative/swagger2.*` 与 `/__negative/openapi31.*`（清单 `negativeDocuments`）。45 个场景 / 87 个端点 / 179 条自测。 |
 | 2026-10-11 | H-1011：新增 `depend-switchable` 场景（E 组，无鉴权，4 个端点）：分支依赖 A→B→C、A→D（`/customers` → `/customers/{customerId}/orders` → `/orders/{orderNo}/items`，`/customers` → `/addresses?customer_id=`，正常时 5 / 11 / 16 / 6 条）；新增 admin 接口 `GET/POST /__admin/faults?scenario=depend-switchable`，按接口在运行期切换「正常 / 持续失败」（状态码可设，默认 503），并返回每个接口自上次复位以来的调用次数（成功、失败分开）；按场景复位与全量复位都会还原开关与计数；`/__admin/state` 新增 `faultSwitches`；清单端点新增 `faultKey` / `dependsOn`。46 个场景 / 91 个端点 / 195 条自测。 |
+| 2026-10-13 | H-VERIFY-1013：新增 10 个补测场景（21 个端点），现有场景的行为与单场景文档不变。A 组 `token-typed-fields`（取令牌返回带布尔 `success` / `data.refreshable` 与小数 `data.refreshRatio`）、`oauth2-scope-required`（令牌接口只接受 `scope=read`，否则 400 `invalid_scope`）、`token-slow`（取令牌延迟返回，新配置项 `tokenSlowDelaySeconds`，默认 5）；C 组 `nested-two-level`（两层嵌套对象数组，3 / 6 / 9 条）、`special-field-names`（数组字段与子字段名含连字符 / 中文 / 数字开头）；D 组 `required-header-cookie`（必填请求头 `X-Tenant-Id`、必填 Cookie `region`）、`depend-empty-parent`（前置恒定 0 条）、`depend-mixed-key`（取值字段依次为 1 / "1" / 2 / "3"，另有一个下游取自两个前置）；E 组 `depend-two-roots`（一个下游依赖两个根，三个接口各有开关）、`page-fail-midway`（缺省第 3 页起 500，切 normal 才全通）。`/__admin/faults` 从只认 `depend-switchable` 扩成按场景名分发到三个场景（原场景的请求与返回不变）；`/__admin/state` 新增 `faultSwitchesByScenario`；清单端点新增 `nestedArrays` / `mixedTypeField` / `referenceTotals` 等字段，`dependsOn` 在一个下游依赖两个前置时是数组。56 个场景 / 112 个端点 / 233 条自测。 |

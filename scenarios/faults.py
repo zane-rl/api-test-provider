@@ -3,6 +3,7 @@
 
 照搬现有 mock 的 8 个故障端点，另加一个 302 重定向。
 可按接口切换「正常 / 持续失败」的分支依赖场景 `depend-switchable` 在 `switchable.py`，由这里一并注册。
+带开关的补测场景 `depend-two-roots`、`page-fail-midway` 在 `faultcases.py`，同样由这里一并注册。
 所有计数器可由 `POST /__admin/reset` 复位，保证用例可重复执行。
 
 这些端点有副作用（计数、sleep），因此**不参与「调用一次 handler 推断响应 schema」**，
@@ -12,10 +13,16 @@
 import threading
 import time
 
-from . import switchable
+from . import faultswitch, switchable
 from .common import (
     Endpoint, Scenario, NO_AUTH, build_dataset, json_resp, Resp, qp,
 )
+
+# depend-switchable 的开关先于通用开关板存在，这里包一层登记进去，admin 侧统一按场景名分发。
+# 要排在 faultcases 导入之前：开关板的登记顺序就是提示信息里的展示顺序
+faultswitch.register_switchable(switchable)
+
+from . import faultcases  # noqa: E402
 
 FAULT_ROWS = build_dataset("FLT", 5)
 # 慢响应端点单独一份数据：后端要从这里推断记录结构，不能是空数组
@@ -173,4 +180,4 @@ def build_scenarios():
     ]
     return [Scenario("faults", "故障注入", "错误处理策略、重试、限流、超时、非 JSON、截断、结构漂移、重定向",
                      endpoints, auth=NO_AUTH),
-            switchable.build_scenario()]
+            switchable.build_scenario()] + faultcases.build_scenarios()

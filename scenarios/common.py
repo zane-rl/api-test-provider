@@ -482,6 +482,12 @@ def hp(name, type_="string", required=False, description="", example=None):
             "description": description, "schema": schema}
 
 
+def cp(name, type_="string", required=False, description=""):
+    """Cookie 参数声明（业务参数；鉴权用的 Cookie 走 `api_key_req`）"""
+    return {"name": name, "in": "cookie", "required": required,
+            "description": description, "schema": {"type": type_}}
+
+
 def pp(name, type_="string", description=""):
     """Path 参数声明（永远必填）"""
     return {"name": name, "in": "path", "required": True,

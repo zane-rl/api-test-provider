@@ -90,7 +90,7 @@ class OpenApiTest(ProviderTestCase):
                                          "文档声明的 %s %s 打不通：%s"
                                          % (method.upper(), path, resp.text[:200]))
                         self._assert_no_schema_drift(entry, operation, resp)
-        self.assertEqual(91, checked, "端点总数变了，请同步 README")
+        self.assertEqual(112, checked, "端点总数变了，请同步 README")
 
     def _call_declared(self, entry, item, operation, auth):
         url = item["url"]

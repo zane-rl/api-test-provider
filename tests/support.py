@@ -17,6 +17,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import server as server_module  # noqa: E402
+from scenarios import auth as auth_module  # noqa: E402
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -112,6 +113,9 @@ def obtain_token(base_url, flow):
         return extract(resp.json, flow["tokenPath"])
     if kind == "OAUTH2_CLIENT_CREDENTIALS":
         form = {"grant_type": flow["grantType"]}
+        # 清单声明了 scope 就带上：oauth2-scope-required 的令牌接口不带会 400
+        if flow.get("scope"):
+            form["scope"] = flow["scope"]
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         if flow["clientAuthMethod"] == "post":
             form["client_id"] = flow["clientId"]
@@ -311,9 +315,14 @@ class ProviderTestCase(unittest.TestCase):
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
         cls.base = cls.httpd.advertise_base
+        # token-slow 的取令牌接口缺省延迟 5 秒：遍历全部场景的用例不该被它拖住，
+        # 自测期间统一调成 0（配置是进程级的），要验延迟的用例自己临时调回去
+        auth_module.apply_config({"tokenSlowDelaySeconds": 0})
 
     @classmethod
     def tearDownClass(cls):
+        auth_module.apply_config(
+            {"tokenSlowDelaySeconds": auth_module.TOKEN_SLOW_DEFAULT_SECONDS})
         cls.httpd.shutdown()
         cls.httpd.server_close()
 
