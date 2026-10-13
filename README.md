@@ -572,9 +572,14 @@ tests/                      标准库 unittest
 3. 需要鉴权就传 `auth=AuthSpec(kind=..., requirements=[...])`；要附加鉴权参数用
    `extra_param_req(...)`，它会自动进清单的 `extraAuthParams`。
 4. 有副作用的端点（计数、sleep、签发令牌）必须显式给 `response_schema`，并把 `doc_sample` 设为 `None`。
+   只需要跳过副作用、仍想让 schema 由真实响应推断的（如 `/slow`、带开关的场景），改为在处理函数里判断 `ctx.doc_mode`。
+   要给接口加「正常 / 持续失败」的开关与调用计数：用 `scenarios/faultswitch.py` 的 `SwitchBoard`，
+   `faultswitch.register(...)` 登记后 `/__admin/faults?scenario=<场景>`、按场景复位与全量复位自动生效
+   （参照 `scenarios/faultcases.py`）。
 5. 跑 `./run_tests.sh`——通用用例会自动覆盖新场景（文档可达性、清单一致性、翻页到底）。
-   若新增的是 A 类鉴权场景或 B 类数据端点，记得同步 `tests/test_auth.py` /
-   `tests/test_pagination.py` 里的数量断言。
+   同步数量断言：`tests/test_faults_admin.py`（场景总数）、`tests/test_docs.py`（端点总数）；
+   若新增的是 A 类鉴权场景或 B 类数据端点，还有 `tests/test_auth.py` /
+   `tests/test_pagination.py`。
 6. 重新生成场景总表：`python3 tools/dump_scenario_table.py`，把结果贴回本文件的
    `<!-- SCENARIO-TABLE -->` 区块。
    公共参数用 `Scenario(shared_parameters={...})` + `ref_param("组件名")` 声明，路径项级参数用 `Endpoint(path_parameters=[...])`。
