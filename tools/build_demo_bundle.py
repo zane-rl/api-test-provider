@@ -52,7 +52,8 @@ def build_bundle(output, base_url):
         materials = build_materials(base_url, stage / "demo-materials")
         hashes = {str(path.relative_to(stage)): hashlib.sha256(path.read_bytes()).hexdigest()
                   for path in sorted(stage.rglob("*")) if path.is_file()}
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         manifest = {"sourceCommit": commit.stdout.strip() if commit.returncode == 0 else None,
                     "buildIncludesWorkingTree": True, "baseUrl": materials["baseUrl"],
                     "addressIsTemplate": materials["addressIsTemplate"], "filesSha256": hashes}

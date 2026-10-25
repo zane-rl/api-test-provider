@@ -152,7 +152,7 @@ class StaticFilesTest(unittest.TestCase):
         # 独立进程跑，保证用的是默认配置，不受本进程其他用例改过的 config 影响
         result = subprocess.run(
             [sys.executable, os.path.join(ROOT, "tools", "export_openapi_by_auth.py"), "--check"],
-            cwd=ROOT, capture_output=True, text=True)
+            cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 

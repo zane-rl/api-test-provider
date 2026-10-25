@@ -1,6 +1,8 @@
 # 研发环境运行API演示服务
 
-包内只有Python标准库项目，不需要pip依赖、Mongo或Redis。选一台研发Linux服务器，使用可被HDP后端和演示电脑访问的IP:端口。当前包未部署到线上；实际IP尚未提供。
+包内只有Python标准库项目，最低Python 3.6，不需要pip依赖、Mongo或Redis。选一台研发Linux服务器，使用可被HDP后端和演示电脑访问的IP:端口。
+
+2026-10-26收到本次地址`http://43.136.128.102:18090`，目标为CentOS 7 / Python 3.6.8。旧包因直接导入Python 3.7才提供的`ThreadingHTTPServer`而启动失败。修订版使用`HTTPServer + ThreadingMixIn`，并将打包工具的子进程参数改为3.6可用形式，无需升级系统Python。实际远端启动及连通性仍须确认，不把本地回归记为Linux部署通过。
 
 ## Linux直接运行
 

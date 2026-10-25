@@ -24,7 +24,8 @@ import threading
 import traceback
 from collections import deque
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from scenarios import REGISTRY, reset_all
@@ -37,6 +38,13 @@ from scenarios.common import ApiError, Ctx, Resp, error_resp, json_resp, token_s
 from scenarios.bundle import build_bundle, bundle_names
 from scenarios.openapi import build_openapi
 from scenarios.yamlout import dump as yaml_dump
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """兼容 Python 3.6 的线程化 HTTP 服务，避免空闲连接阻塞其他请求。"""
+
+    daemon_threads = True
+
 
 MAX_LOG = 5000
 MAX_BODY_BYTES = 10 * 1024 * 1024      # 请求体上限，防止分块读取被撑爆
