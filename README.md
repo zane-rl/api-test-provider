@@ -17,12 +17,15 @@
 
 > 代码里出现的所有凭证都是明显的测试假值（`test-key-123` 之类），不含任何真实密钥。
 
+**10月26日研发演示：** [25分钟完整主线＋10分钟备用](docs/DEMO-20261026.md)；[Linux/Docker部署与IP地址配置](docs/DEPLOYMENT.md)。离线包提供全部56个场景的可上传JSON、分幕索引和文件哈希，主线覆盖正式保存、首次同步、查看数据和保存为空间API。生成器不操作HDP资源；正式步骤须取得当次授权。目标研发环境页面排练另记。
+
 ## 启动
 
 ```bash
 ./run.sh                 # 监听 http://127.0.0.1:18090
 ./run.sh --port 9001     # 换端口（文档里的 servers[0].url 会跟着变）
 ./run.sh --quiet         # 不打印每条请求
+./run.sh --host 0.0.0.0 --port 18090 --advertise-base-url http://10.0.0.8:18090  # 换成研发IP
 
 ./stop.sh                # 停掉 127.0.0.1:18090 上的实例
 ./stop.sh --port 9001    # 停掉指定端口上的实例
@@ -33,6 +36,18 @@
 
 `stop.sh` 只停「监听该端口、命令行是 `server.py`、工作目录是本仓库」的进程：端口上没有进程时什么都不做（退出码 0），
 被别的程序占用时拒绝并返回 1，不会误杀。**联调 / E2E 共用的常驻实例不要随手停**，先确认没人在用。
+
+研发部署必须显式指定`--advertise-base-url`，否则保持原本机地址。它只接受HTTP(S)源地址，不接收凭证、路径或查询参数；文档、令牌地址和同源绝对分页链接都使用它，不信任请求Host头。监听地址与外部IP/端口可不同，适用于Docker端口映射。
+
+打包和材料生成（只写指定本地目录，不访问HDP或共享服务）：
+
+```bash
+python3 tools/build_demo_bundle.py --output dist --base-url http://10.0.0.8:18090
+python3 tools/prepare_demo.py --base-url http://10.0.0.8:18090 --output dist/demo-materials-1026
+python3 tools/check_demo.py --base-url http://10.0.0.8:18090
+```
+
+没有真实研发IP时可省略打包的`--base-url`，包中会明确标记为地址模板；部署前重新生成真实IP素材。打包白名单排除Git、IDE、日志和本地运行文件，附SHA256校验；已有同名包/素材不覆盖。
 
 快速自检：
 
@@ -74,6 +89,12 @@ scenarios/
   __init__.py               REGISTRY：场景注册表（有序），名字重复会直接报错
 tools/dump_scenario_table.py  导出下面那张场景总表
 tools/export_openapi_by_auth.py  生成 openapi/ 目录（按鉴权类型的合并文档 .yaml / .yml / .json + 汇总说明）
+tools/build_demo_bundle.py   生成独立Linux演示包、素材和SHA256清单
+tools/prepare_demo.py        按实际研发IP离线生成上传文档、分幕索引与夹具事实
+tools/check_demo.py          只读检查部署健康、场景和对外文档地址
+tools/demo_scenarios.py      25分钟主线与10分钟备用编排
+docs/                       研发部署步骤与演示剧本
+Dockerfile                  可选镜像构建入口（Provider运行不需要Docker）
 openapi/                    生成物，勿手改：<鉴权类型>.{yaml,yml,json}、all.{yaml,yml,json}、README.md
 tests/                      标准库 unittest
 ```
@@ -603,8 +624,8 @@ tests/                      标准库 unittest
   且**它与 `/__admin/config` 一样是进程级的**，并发跑别的用例时把延迟调成 0 会影响到它。
   建议这个场景的 E2E 独占一个实例。
 - 只支持 HTTP，没有 HTTPS / mTLS 场景。
-- `suppliers-crosshost` 的「异源」靠 `localhost` 与 `127.0.0.1` 的主机名差异构造，二者解析到同一进程；
-  如果后端按 IP 而不是按主机名判同源，这个场景不会触发拒绝。
+- `suppliers-crosshost` 默认仍用`localhost`与`127.0.0.1`的主机名差异构造；研发IP模式也会换成不同主机名，
+  不应跟随这个链接。它是异源反例，不代表产品支持下一页链接分页；本机若按IP而不是主机名判同源，仍可能不触发拒绝。
 - 故障类端点大多没有进 `expectedTotal` 体系（返回随调用次数变化），需逐条按上面的表断言；例外是 `/slow` 与 `/ok`，它们恒定返回 5 条真实记录，可以按 `expectedTotal` 断言。
 - `not-json` / `huge` 这类端点的响应体不是常规结构，文档里给的是显式 schema 与示意性 example。
 
@@ -612,6 +633,7 @@ tests/                      标准库 unittest
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-25 | 研发演示交付：支持显式对外HTTP(S)源地址，文档/令牌/分页地址统一且本地默认保持；新增白名单Linux打包、IP版文档生成、只读部署检查、Docker构建文件及25＋10分钟业务剧本。场景和数据不变，56场景/112端点；全套237项自测通过。本地无Docker，镜像未构建；线上部署和研发页面排练未执行。 |
 | 2026-09-20 | v1：33 个场景 / 59 个端点 / 84 条自测用例。含 Commander 追加的 4 个鉴权场景（`apikey-header-prefix`、`apikey-extra`、`basic-extra`、`oauth2-extra`）与 `role` / 结构化鉴权配置要求。 |
 | 2026-09-20 | H2：`POST /__admin/reset` 支持 `?scenario=` 按场景复位；新增 `oauth2-expiring`（令牌按时间过期，`expires_in` 默认 40 秒，可由 `/__admin/config` 调）；`/__admin/scenarios` 的 `tokenFlow` 改为实时取配置值。34 个场景 / 61 个端点 / 93 条自测。 |
 | 2026-09-20 | H3：修复 `Transfer-Encoding: chunked` 请求体读不到的缺陷（JDK HttpClient 默认走分块，原来只认 `Content-Length`，令牌 / 登录请求体被读成空串）；新增 `oauth2-paged-maxuses` 与 `oauth2-paged-expiring` 两个分页 OAuth2 场景（各 50 条 5 页）；配置项改为按键校验取值范围。36 个场景 / 65 个端点 / 117 条自测。 |

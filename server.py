@@ -25,7 +25,7 @@ import traceback
 from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from scenarios import REGISTRY, reset_all
 from scenarios import auth as auth_module
@@ -476,13 +476,33 @@ def _parse_cookies(raw):
 
 # ==================== 启动 ====================
 
-def create_server(host="127.0.0.1", port=18090, quiet=False, advertise_host="127.0.0.1"):
+def normalize_public_base_url(value):
+    """校验显式对外地址；只接受HTTP(S)源地址，不接收凭证、路径或查询参数。"""
+    value = value.strip()
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        valid = (parsed.scheme in ("http", "https") and parsed.hostname
+                 and parsed.username is None and parsed.password is None
+                 and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
+                 and not any(char.isspace() for char in value)
+                 and (port is None or 0 < port < 65536))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError("对外地址须为 http(s)://IP或域名[:端口]，不能包含凭证、路径或查询参数")
+    return "%s://%s" % (parsed.scheme, parsed.netloc)
+
+
+def create_server(host="127.0.0.1", port=18090, quiet=False, advertise_host="127.0.0.1",
+                  advertise_base_url=None):
+    public_base = normalize_public_base_url(advertise_base_url) if advertise_base_url else None
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     httpd.quiet = quiet
     httpd.request_log = RequestLog()
     # 对外自称地址：OpenAPI servers、下一页同源绝对地址都用它，不受 Host 头影响
-    httpd.advertise_base = "http://%s:%d" % (advertise_host, httpd.server_address[1])
+    httpd.advertise_base = public_base or "http://%s:%d" % (advertise_host, httpd.server_address[1])
     return httpd
 
 
@@ -491,9 +511,11 @@ def main():
     parser.add_argument("--port", type=int, default=18090, help="监听端口，默认 18090")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址，默认 127.0.0.1")
     parser.add_argument("--quiet", action="store_true", help="不打印每条请求日志")
+    parser.add_argument("--advertise-base-url", type=normalize_public_base_url,
+                        help="客户端可访问的完整源地址，如 http://10.0.0.8:18090；默认保持本机地址")
     args = parser.parse_args()
 
-    httpd = create_server(args.host, args.port, args.quiet)
+    httpd = create_server(args.host, args.port, args.quiet, advertise_base_url=args.advertise_base_url)
     base = httpd.advertise_base
     endpoint_count = sum(len(s.endpoints) for s in REGISTRY.values())
     print("测试 API 服务已启动：%s" % base)

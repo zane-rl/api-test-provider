@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!server.py
+!scenarios/
+!scenarios/*.py
+scenarios/__pycache__/

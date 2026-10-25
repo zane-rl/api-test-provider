@@ -10,6 +10,7 @@ from .common import (
     json_resp, qp, hp, json_body,
 )
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 # ==================== 数据集（固定公式，重启一致） ====================
 
@@ -286,11 +287,15 @@ def _scenario_next_url():
     def cross_host(ctx):
         page = ctx.int_query("page", 1)
         chunk, has_next = _suppliers_chunk(page)
-        # 指向 localhost，与文档里的 127.0.0.1 不同源：后端应拒绝跟随
+        # 默认仍指向localhost；研发IP或自定义主机同样必须构造不同源的反例。
         nxt = None
         if has_next:
+            origin = urlsplit(ctx.base_url)
+            other_host = "127.0.0.1" if origin.hostname == "localhost" else "localhost"
+            authority = other_host + (":%d" % origin.port if origin.port else "")
+            other_base = origin._replace(netloc=authority, path="").geturl()
             nxt = "%s/s/next-url/suppliers-crosshost?page=%d" % (
-                ctx.base_url.replace("127.0.0.1", "localhost").split("/s/")[0], page + 1)
+                other_base, page + 1)
         return json_resp({"data": chunk, "next": nxt})
 
     page_param = [qp("page", "integer", description="页码，首页不传；后续请求应直接使用 next 给出的地址")]
